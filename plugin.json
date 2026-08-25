@@ -1,0 +1,42 @@
+{
+  "name": "siyuan-secret-vault",
+  "author": "siyuan-secret-vault contributors",
+  "url": "",
+  "version": "0.1.0",
+  "minAppVersion": "3.8.0",
+  "kernels": [
+    "windows",
+    "linux",
+    "darwin",
+    "all"
+  ],
+  "backends": [
+    "windows",
+    "linux",
+    "darwin"
+  ],
+  "frontends": [
+    "desktop",
+    "browser-desktop",
+    "desktop-window"
+  ],
+  "displayName": {
+    "default": "Secret Vault",
+    "zh-CN": "秘密库"
+  },
+  "description": {
+    "default": "Encrypted secrets grouped by independent memory-only passwords, with interactive IFrame references.",
+    "zh-CN": "按分组使用独立口令加密内容，并可将交互式 IFrame 引用插入思源文档。"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh-CN": "README.zh-CN.md"
+  },
+  "keywords": [
+    "secret",
+    "vault",
+    "encryption",
+    "密码",
+    "加密"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "siyuan-secret-vault",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Group-based encrypted secret vault with interactive SiYuan IFrame blocks",
+  "license": "MIT",
+  "scripts": {
+    "dev": "cross-env NODE_ENV=development VITE_SOURCEMAP=inline vite build --watch",
+    "build": "cross-env NODE_ENV=production vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "@tsconfig/svelte": "^5.0.0",
+    "@types/node": "^20.3.0",
+    "cross-env": "^7.0.3",
+    "siyuan": "1.2.2",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.4.4",
+    "vite-plugin-static-copy": "^1.0.2",
+    "vite-plugin-zip-pack": "^1.0.5"
+  }
+}

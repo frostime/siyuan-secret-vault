@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="./embed.css" />
+  <title>Secret Vault</title>
+</head>
+<body>
+  <main id="app" class="secret-card state-loading">
+    <div class="header">
+      <div class="identity">
+        <strong id="label">Secret</strong>
+        <span id="group"></span>
+      </div>
+      <span id="status" class="status">连接中…</span>
+    </div>
+    <pre id="content" class="content" hidden></pre>
+    <div id="error" class="error" hidden></div>
+    <div class="actions">
+      <button id="reveal">显示</button>
+      <button id="copy">复制</button>
+      <button id="lock">锁定分组</button>
+      <button id="open">打开秘密库</button>
+    </div>
+  </main>
+  <script type="module" src="./embed.js"></script>
+</body>
+</html>
