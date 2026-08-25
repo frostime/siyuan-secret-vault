@@ -11,12 +11,23 @@ import { mount, unmount } from "svelte";
 import VaultApp from "./ui/VaultApp.svelte";
 import { VaultController } from "./vault";
 import { EmbedBroker } from "./broker";
+import {
+  deleteBlock,
+  insertMarkdownBlock,
+  setBlockAttrs,
+  type BlockInsertionTarget,
+} from "./api";
 import "./index.scss";
 
 const TAB_TYPE = "secret-vault";
 const ICON = "iconSecretVault";
 
 type SvelteApp = ReturnType<typeof mount>;
+
+type SlashTarget = {
+  target: BlockInsertionTarget;
+  anchorBlockId: string | null;
+};
 
 export default class SecretVaultPlugin extends Plugin {
   private controller!: VaultController;
@@ -33,16 +44,9 @@ export default class SecretVaultPlugin extends Plugin {
     `);
 
     this.controller = new VaultController(this, (secretId) => this.insertSecretReference(secretId));
-    await this.controller.initialize();
 
-    this.broker = new EmbedBroker(
-      this.controller,
-      (groupId, groupName, initialized) => this.requestUnlock(groupId, groupName, initialized),
-      (secretId) => this.openVault(secretId),
-    );
-    this.broker.start();
-    this.brokerUnsubscribe = this.controller.subscribe(() => this.broker.invalidateAll());
-
+    // Register integrations before the first await. SiYuan can restore layout while
+    // asynchronous plugin initialization is still running.
     const plugin = this;
     this.customTab = this.addTab({
       type: TAB_TYPE,
@@ -64,10 +68,61 @@ export default class SecretVaultPlugin extends Plugin {
     this.eventBus.on("switch-protyle", this.captureProtyle);
     this.eventBus.on("loaded-protyle-static", this.captureProtyle);
 
+    this.protyleSlash = [
+      {
+        filter: [
+          "secret",
+          "new secret",
+          "create secret",
+          "秘密",
+          "新建秘密",
+          "创建秘密",
+          "加密内容",
+        ],
+        html: `<div class="b3-list-item__first"><span class="b3-list-item__text">新建秘密并插入</span><span class="b3-list-item__meta">🔐 +</span></div>`,
+        id: "create-secret-and-insert",
+        callback: (protyle: Protyle, nodeElement: HTMLElement) => {
+          this.lastProtyle = protyle;
+          const slashTarget = this.captureSlashTarget(protyle, nodeElement);
+          this.clearSlashQuery(protyle);
+          this.openCreateSecretDialog(protyle, slashTarget.target);
+        },
+      },
+      {
+        filter: [
+          "secret",
+          "secret ref",
+          "secret vault",
+          "insert secret",
+          "秘密引用",
+          "秘密库",
+          "插入秘密",
+        ],
+        html: `<div class="b3-list-item__first"><span class="b3-list-item__text">插入已有秘密</span><span class="b3-list-item__meta">🔐 ↗</span></div>`,
+        id: "insert-secret-reference",
+        callback: (protyle: Protyle, nodeElement: HTMLElement) => {
+          this.lastProtyle = protyle;
+          const slashTarget = this.captureSlashTarget(protyle, nodeElement);
+          this.clearSlashQuery(protyle);
+          this.openSecretPicker(protyle, slashTarget.target);
+        },
+      },
+    ];
+
+    await this.controller.initialize();
+
+    this.broker = new EmbedBroker(
+      this.controller,
+      (groupId, groupName, initialized) => this.requestUnlock(groupId, groupName, initialized),
+      (secretId) => this.openVault(secretId),
+    );
+    this.broker.start();
+    this.brokerUnsubscribe = this.controller.subscribe(() => this.broker.invalidateAll());
   }
 
   onLayoutReady(): void {
     this.addTopBar({
+      id: "secret-vault-topbar",
       icon: ICON,
       title: "秘密库",
       position: "right",
@@ -101,33 +156,291 @@ export default class SecretVaultPlugin extends Plugin {
         icon: ICON,
         title: "秘密库",
         data: {},
-        id: `${this.name}-${TAB_TYPE}`,
+        id: this.name + TAB_TYPE,
       },
     });
   }
 
   private getTargetProtyle(): Protyle | null {
     const editors = getAllEditor();
-    if (this.lastProtyle?.block?.rootID && editors.some((editor) => editor?.protyle === this.lastProtyle)) {
+    if (this.lastProtyle?.block?.rootID && editors.includes(this.lastProtyle)) {
       return this.lastProtyle;
     }
     for (let i = editors.length - 1; i >= 0; i--) {
-      if (editors[i]?.protyle?.block?.rootID) return editors[i].protyle ?? null;
+      if (editors[i]?.block?.rootID) return editors[i];
     }
     return null;
   }
 
   private async insertSecretReference(secretId: string): Promise<void> {
-    const secret = this.controller.getSecret(secretId);
-    if (!secret) throw new Error("秘密不存在");
     const protyle = this.getTargetProtyle();
     if (!protyle) throw new Error("没有可插入的文档编辑器，请先打开一个文档");
+    const target = this.resolveEditorInsertionTarget(protyle);
+    await this.insertSecretReferenceInto(secretId, protyle, target);
+  }
+
+  /**
+   * Inserts a real SiYuan IFrame block through the kernel block API.
+   *
+   * Do NOT append a Kramdown IAL string to protyle.insert(): protyle.insert is
+   * caret/inline-context sensitive, so an iframe + block IAL can be parsed as
+   * paragraph text. Attributes are deliberately persisted in a second API call.
+   */
+  private async insertSecretReferenceInto(
+    secretId: string,
+    _protyle: Protyle,
+    target: BlockInsertionTarget,
+  ): Promise<void> {
+    const secret = this.controller.getSecret(secretId);
+    if (!secret) throw new Error("秘密不存在");
 
     const src = `/plugins/${this.name}/embed/index.html?secret=${encodeURIComponent(secret.id)}`;
     const iframe = `<iframe src="${src}" style="width: 100%; height: 180px; border: 0; border-radius: 8px;"></iframe>`;
-    const ial = `{: custom-secret-vault="1" custom-secret-id="${secret.id}" custom-secret-group="${secret.groupId}"}`;
-    protyle.insert(`${iframe}\n${ial}`);
-    showMessage(`已插入秘密引用：${secret.label}`);
+
+    const inserted = await insertMarkdownBlock(iframe, target);
+
+    // Standalone <iframe> is expected to become NodeIFrame. If a future SiYuan/Lute
+    // version changes that parsing rule, remove the unexpected block rather than
+    // leaving HTML/paragraph garbage in the user's document.
+    if (inserted.dom && !inserted.dom.includes('data-type="NodeIFrame"')) {
+      await deleteBlock(inserted.id).catch(() => undefined);
+      throw new Error("思源没有把嵌入内容解析为 IFrame 块；已回滚此次插入");
+    }
+
+    try {
+      await setBlockAttrs(inserted.id, {
+        "custom-secret-vault": "1",
+        "custom-secret-id": secret.id,
+        "custom-secret-group": secret.groupId,
+        "custom-secret-version": "1",
+      });
+    } catch (error) {
+      await deleteBlock(inserted.id).catch(() => undefined);
+      throw error;
+    }
+
+    showMessage(`已插入秘密：${secret.label}`);
+  }
+
+  private captureSlashTarget(protyle: Protyle, nodeElement: HTMLElement): SlashTarget {
+    const anchorBlockId = nodeElement.dataset.nodeId || null;
+    if (!anchorBlockId) {
+      return {
+        anchorBlockId: null,
+        target: this.resolveEditorInsertionTarget(protyle),
+      };
+    }
+
+    // Slash commands are normally entered in a fresh paragraph. In that common
+    // case insert *before* the slash paragraph, so after clearing /secret the empty
+    // paragraph naturally remains below the IFrame as a caret continuation block.
+    const text = (nodeElement.textContent ?? "").trim();
+    const isSlashOnlyParagraph = /^\/\S*$/.test(text);
+    return {
+      anchorBlockId,
+      target: isSlashOnlyParagraph
+        ? { nextID: anchorBlockId }
+        : { previousID: anchorBlockId },
+    };
+  }
+
+  private clearSlashQuery(protyle: Protyle): void {
+    const lute = (globalThis as typeof globalThis & { Lute?: { Carte?: string } }).Lute;
+    // Lute.Carte is SiYuan's editor sentinel for consuming the active slash query
+    // without inserting visible content. Empty string is only a defensive fallback.
+    protyle.insert(typeof lute?.Carte === "string" ? lute.Carte : "");
+  }
+
+  private resolveEditorInsertionTarget(protyle: Protyle): BlockInsertionTarget {
+    const selection = globalThis.getSelection?.();
+    const anchorNode = selection?.anchorNode ?? null;
+    const element = anchorNode instanceof Element ? anchorNode : anchorNode?.parentElement ?? null;
+    const selectedBlock = element?.closest<HTMLElement>("[data-node-id]");
+    if (selectedBlock?.dataset.nodeId && protyle.wysiwyg.element.contains(selectedBlock)) {
+      return { previousID: selectedBlock.dataset.nodeId };
+    }
+    if (protyle.block?.rootID) return { parentID: protyle.block.rootID };
+    throw new Error("无法确定插入位置");
+  }
+
+  private openSecretPicker(protyle: Protyle, target: BlockInsertionTarget): void {
+    const snapshot = this.controller.getSnapshot();
+    const groups = new Map(snapshot.groups.map((group) => [group.id, group.name]));
+
+    const dialog = new Dialog({
+      title: "插入秘密",
+      width: "580px",
+      content: `
+        <div class="b3-dialog__content secret-vault-picker">
+          <button class="b3-button b3-button--text fn__block" type="button" data-secret-picker-create>+ 新建秘密并插入</button>
+          <div class="secret-vault-picker__separator"></div>
+          <input class="b3-text-field fn__block" type="search" autocomplete="off" placeholder="按 label 或分组搜索已有秘密…" data-secret-picker-search />
+          <div class="secret-vault-picker__list" data-secret-picker-list></div>
+          <div class="secret-vault-picker__empty fn__none" data-secret-picker-empty>没有匹配的秘密。</div>
+        </div>`,
+    });
+
+    const create = dialog.element.querySelector<HTMLButtonElement>("[data-secret-picker-create]")!;
+    const search = dialog.element.querySelector<HTMLInputElement>("[data-secret-picker-search]")!;
+    const list = dialog.element.querySelector<HTMLElement>("[data-secret-picker-list]")!;
+    const empty = dialog.element.querySelector<HTMLElement>("[data-secret-picker-empty]")!;
+
+    create.addEventListener("click", () => {
+      dialog.destroy();
+      this.openCreateSecretDialog(protyle, target);
+    });
+
+    const render = () => {
+      const q = search.value.trim().toLowerCase();
+      const matches = snapshot.secrets.filter((secret) => {
+        const groupName = groups.get(secret.groupId) ?? secret.groupId;
+        return !q || secret.label.toLowerCase().includes(q) || groupName.toLowerCase().includes(q);
+      });
+
+      list.replaceChildren();
+      empty.classList.toggle("fn__none", matches.length > 0);
+
+      for (const secret of matches) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "b3-list-item b3-list-item--two";
+        button.dataset.secretId = secret.id;
+
+        const first = document.createElement("span");
+        first.className = "b3-list-item__first";
+        const text = document.createElement("span");
+        text.className = "b3-list-item__text";
+        text.textContent = secret.label;
+        first.appendChild(text);
+
+        const meta = document.createElement("span");
+        meta.className = "b3-list-item__meta";
+        meta.textContent = groups.get(secret.groupId) ?? secret.groupId;
+
+        button.append(first, meta);
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          try {
+            await this.insertSecretReferenceInto(secret.id, protyle, target);
+            dialog.destroy();
+          } catch (error) {
+            button.disabled = false;
+            showMessage(error instanceof Error ? error.message : String(error), 5000, "error");
+          }
+        });
+        list.appendChild(button);
+      }
+    };
+
+    search.addEventListener("input", render);
+    search.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        const first = list.querySelector<HTMLButtonElement>("button:not(:disabled)");
+        first?.click();
+      }
+    });
+
+    render();
+    setTimeout(() => search.focus(), 0);
+  }
+
+  private openCreateSecretDialog(protyle: Protyle, target: BlockInsertionTarget): void {
+    const snapshot = this.controller.getSnapshot();
+    if (snapshot.groups.length === 0) {
+      showMessage("没有可用分组", 5000, "error");
+      return;
+    }
+
+    const groupOptions = snapshot.groups
+      .map((group) => `<option value="${this.escapeHtml(group.id)}">${this.escapeHtml(group.name)}${group.unlocked ? " · 已解锁" : " · 已锁定"}</option>`)
+      .join("");
+
+    const dialog = new Dialog({
+      title: "新建秘密并插入",
+      width: "620px",
+      content: `
+        <div class="b3-dialog__content secret-vault-create-inline">
+          <label>
+            <span>分组</span>
+            <select class="b3-select fn__block" data-secret-create-group>${groupOptions}</select>
+          </label>
+          <label>
+            <span>Label（明文）</span>
+            <input class="b3-text-field fn__block" type="text" autocomplete="off" placeholder="例如：GitHub Token" data-secret-create-label />
+          </label>
+          <label>
+            <span>Content（加密）</span>
+            <textarea class="b3-text-field fn__block" rows="10" spellcheck="false" placeholder="要加密保存的内容" data-secret-create-content></textarea>
+          </label>
+          <div class="secret-vault-create-inline__hint">若所选分组尚未解锁，保存时会要求输入该分组口令；口令不会持久化。</div>
+          <div data-secret-create-error class="vault-error fn__none"></div>
+        </div>
+        <div class="b3-dialog__action">
+          <button class="b3-button b3-button--cancel" data-secret-create-cancel>取消</button>
+          <button class="b3-button b3-button--text" data-secret-create-ok>创建并插入</button>
+        </div>`,
+    });
+
+    const groupSelect = dialog.element.querySelector<HTMLSelectElement>("[data-secret-create-group]")!;
+    const labelInput = dialog.element.querySelector<HTMLInputElement>("[data-secret-create-label]")!;
+    const contentInput = dialog.element.querySelector<HTMLTextAreaElement>("[data-secret-create-content]")!;
+    const error = dialog.element.querySelector<HTMLElement>("[data-secret-create-error]")!;
+    const ok = dialog.element.querySelector<HTMLButtonElement>("[data-secret-create-ok]")!;
+    const cancel = dialog.element.querySelector<HTMLButtonElement>("[data-secret-create-cancel]")!;
+
+    const submit = async () => {
+      const group = this.controller.getSnapshot().groups.find((item) => item.id === groupSelect.value);
+      if (!group) {
+        this.setInlineError(error, "分组不存在");
+        return;
+      }
+      const label = labelInput.value.trim();
+      if (!label) {
+        this.setInlineError(error, "label 不能为空");
+        labelInput.focus();
+        return;
+      }
+
+      ok.disabled = true;
+      this.setInlineError(error, "");
+      try {
+        if (!this.controller.isGroupUnlocked(group.id)) {
+          const unlocked = await this.requestUnlock(group.id, group.name, group.initialized);
+          if (!unlocked) return;
+        }
+        const secretId = await this.controller.createSecret(group.id, label, contentInput.value);
+        await this.insertSecretReferenceInto(secretId, protyle, target);
+        dialog.destroy();
+      } catch (createError) {
+        this.setInlineError(error, createError instanceof Error ? createError.message : String(createError));
+      } finally {
+        ok.disabled = false;
+      }
+    };
+
+    ok.addEventListener("click", () => void submit());
+    cancel.addEventListener("click", () => dialog.destroy());
+    labelInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void submit();
+    });
+    contentInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void submit();
+    });
+    setTimeout(() => labelInput.focus(), 0);
+  }
+
+  private setInlineError(element: HTMLElement, message: string): void {
+    element.textContent = message;
+    element.classList.toggle("fn__none", !message);
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
   }
 
   private requestUnlock(groupId: string, groupName: string, initialized: boolean): Promise<boolean> {

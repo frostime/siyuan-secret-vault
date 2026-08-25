@@ -75,3 +75,17 @@ npm run build
 4. 大量 IFrame 引用时的 renderer 资源占用。
 
 本版本刻意不通过 DOM 扫描来修复上述问题；如果 IAL 不稳定，应改为在插入 API 返回 block ID 后调用 `setBlockAttrs`，而不是监听和改写 Protyle DOM。
+
+## v0.1.1 交互入口
+
+- 顶栏按钮打开 Vault 自定义页签。
+- 编辑器输入 `/secret`、`/秘密`、`/插入秘密` 等可打开 Secret 选择器，并在当前编辑器位置插入 IFrame 引用。
+- Custom Tab ID 严格使用 `plugin.name + TAB_TYPE`，与 SiYuan `addTab/openTab` 约定保持一致。
+
+## 0.1.2 插入修复
+
+- Slash 命令不再使用 `protyle.insert(iframe + IAL)`；该调用受当前光标/内联解析上下文影响，会把块 IAL 当作普通段落文本。
+- Slash 回调会立即用 `Lute.Carte` 消费 `/secret` 查询文本，然后通过 `/api/block/insertBlock` 插入独立 `<iframe>`，并检查返回 DOM 必须为 `NodeIFrame`。
+- 新块 ID 返回后再单独调用 `/api/attr/setBlockAttrs` 写入 `custom-secret-*` 索引属性，避免 IAL 与 iframe 一起解析。
+- 新增“新建秘密并插入” Slash 命令；可直接在文档中选择分组、填写明文 label 和待加密 content。若分组锁定，会在保存时请求该分组口令。
+- “插入已有秘密”选择器顶部也提供“+ 新建秘密并插入”。

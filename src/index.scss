@@ -31,3 +31,17 @@
 .vault-modal footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .vault-textarea { min-height: 220px; resize: vertical; font-family: var(--b3-font-family-code); }
 @media (max-width: 720px) { .vault-shell { grid-template-columns: 1fr; } .vault-sidebar { border-right: 0; border-bottom: 1px solid var(--b3-border-color); max-height: 180px; } .vault-secret { align-items: flex-start; flex-direction: column; } }
+
+.secret-vault-picker { display: grid; gap: 10px; }
+.secret-vault-picker__list { max-height: 420px; overflow: auto; display: grid; gap: 2px; }
+.secret-vault-picker__list .b3-list-item { width: 100%; border: 0; cursor: pointer; text-align: left; }
+.secret-vault-picker__list .b3-list-item__first { min-width: 0; flex: 1; }
+.secret-vault-picker__list .b3-list-item__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secret-vault-picker__list .b3-list-item__meta { margin-left: 12px; opacity: .65; }
+.secret-vault-picker__empty { padding: 28px 8px; text-align: center; opacity: .6; }
+
+.secret-vault-picker__separator { height: 1px; background: var(--b3-border-color); margin: 2px 0; }
+.secret-vault-create-inline { display: grid; gap: 12px; }
+.secret-vault-create-inline label { display: grid; gap: 6px; }
+.secret-vault-create-inline textarea { resize: vertical; min-height: 180px; font-family: var(--b3-font-family-code); }
+.secret-vault-create-inline__hint { font-size: 12px; opacity: .65; line-height: 1.5; }
