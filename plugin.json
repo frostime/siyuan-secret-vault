@@ -1,8 +1,8 @@
 {
   "name": "siyuan-secret-vault",
   "author": "siyuan-secret-vault contributors",
-  "url": "",
-  "version": "0.1.2",
+  "url": "https://github.com/frostime/siyuan-secret-vault",
+  "version": "0.2.0",
   "minAppVersion": "3.8.0",
   "kernels": [
     "windows",

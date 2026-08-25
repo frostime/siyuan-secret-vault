@@ -1,91 +1,112 @@
 # SiYuan Secret Vault
 
-一个以 `siyuan-note/plugin-sample-vite-svelte` 的 `svelte5` 分支为结构与 API 基线的思源插件原型，用于管理分组秘密并把交互式秘密引用插入文档。
+[English](README.md)
 
-## 当前设计
+Secret Vault 是一款思源笔记插件，用于按分组保存加密文本，并在文档中插入可交互的 Secret 引用。Secret 的内容加密后才会保存；标签保持明文，以便列表展示和搜索。
 
-- 每个 group 使用独立的用户口令。
-- **口令从不持久化**；解锁后只在内存中保留不可导出的 `CryptoKey`。
-- `label` 为明文元数据；只有 `content` 使用 AES-256-GCM 加密。
-- 口令通过 PBKDF2-SHA-256 派生 AES key；每组保存独立随机 salt、迭代参数和认证 verifier。
-- 插件数据保存在 `vault.json`（由思源 `Plugin.saveData/loadData` 管理）。
-- 文档引用使用原生 IFrame Block，指向 `/plugins/siyuan-secret-vault/embed/index.html?secret=...`。
-- embed 页只负责 UI，通过 `postMessage` 与主插件 broker 通信；不轮询、不扫描 Protyle DOM、不使用 MutationObserver。
-- 插入时额外尝试写入 IAL：`custom-secret-id`、`custom-secret-group`，用于后续 SQL 索引。实际引用主键仍以 iframe URL 中的 `secret` 为准。
+## 功能
 
-## MVP 已实现
+- 使用独立口令保护不同分组。
+- 在秘密库页签中创建、搜索、复制、编辑和删除 Secret。
+- 从秘密库或编辑器斜杠菜单插入原生 IFrame 块引用。
+- 直接在文档引用中查看、复制、编辑或锁定 Secret。
+- 秘密库与各个 Protyle 编辑器分别授权，互不连带解锁。
+- 编辑器关闭、连续 15 分钟未访问 Secret 或同步数据重新载入时，清除相应的内存密钥。
 
-- default 分组（首次解锁时设置口令）
-- 新建/删除分组
-- 分组解锁、锁定、修改口令
-- 新建、编辑、删除秘密
-- label 搜索
-- 复制 content
-- 将秘密作为 IFrame 引用插入最近活动文档
-- IFrame 中显示 label / group / 锁定状态
-- IFrame 中解锁并显示、复制、锁定分组、打开 Vault GUI
-- 多端插件数据变化时重新加载并清空内存 key
+## 运行要求
 
-## 安全边界
+- 思源笔记 3.8.0 或更高版本
+- 桌面端、桌面浏览器端或桌面窗口前端
 
-本插件目标是保护工作空间、同步介质和静态插件数据中的 `content`。它不试图抵抗已经控制 SiYuan renderer 的恶意插件/XSS；分组解锁后，主 renderer 中运行的恶意代码理论上仍有能力窃取明文。
+## 安装
 
-`label` 明确设计为明文，请勿在 label 中写入本身需要保密的信息。
+本仓库暂未提供集市自动安装，请从源码构建：
+
+```bash
+pnpm install
+pnpm build
+```
+
+构建后会生成 `dist/` 和 `package.zip`。在思源工作空间中创建以下目录，并将 `package.zip` 的内容解压到其中：
+
+```text
+<工作空间>/data/plugins/siyuan-secret-vault
+```
+
+重启思源或重新加载插件，然后在插件设置中启用 **Secret Vault**。
+
+## 使用方法
+
+### 管理 Secret
+
+1. 点击思源顶栏的锁形图标，打开秘密库页签。
+2. 新建分组并设置口令。首次解锁 default 分组时也会要求设置口令。
+3. 解锁分组后，即可创建和管理其中的 Secret。
+4. 敏感信息应写入 **Content**。**Label** 是明文元数据，不应包含机密内容。
+
+删除 Secret 不会移除文档中已有的引用块。引用会保留并显示为失效状态，避免在删除 Secret 时无提示地改动文档内容。
+
+### 插入文档引用
+
+可以使用以下任一方式：
+
+- 在秘密库中点击 Secret 旁的“插入文档”，将引用插入最近活动的文档编辑器。
+- 在编辑器中输入 `/secret`、`/秘密` 或 `/插入秘密`，然后选择已有 Secret，或在对话框中创建并插入。
+
+同一 Protyle 中的所有 Secret 引用共享该编辑器对相应分组的授权。解锁一个文档，不会同时解锁秘密库或其他文档。
+
+## 授权方式
+
+解锁状态按界面上下文隔离：
+
+- 内置秘密库是一个独立上下文。
+- 每个正在运行的 Protyle 编辑器各自拥有独立上下文。
+- 每个上下文对每个分组的授权，在连续 15 分钟未访问 Secret 后失效。
+- Protyle 关闭时，会立即释放该编辑器持有的全部授权。
+- 修改分组口令后，使用旧口令建立的授权全部失效。发起修改的上下文只有在保存完成时仍处于活动状态，才会保持解锁。
+
+口令从不持久化。派生出的 AES 密钥是不可导出的 `CryptoKey`，仅在仍有上下文需要访问相应分组时保留在渲染器内存中。
+
+## 安全说明
+
+Secret Vault 用于防止他人在不知道分组口令的情况下直接查看工作空间或同步数据中的 Secret 内容：
+
+- 口令使用 PBKDF2-SHA-256 派生密钥，每个分组使用独立的随机 salt。
+- Content 使用 AES-256-GCM 加密，并将分组 ID 和 Secret ID 纳入认证数据。
+- 持久化数据包含 KDF 参数、口令验证密文、明文标签和分组元数据，以及加密后的 Content。
+
+本插件无法在思源渲染器已被攻破时继续保护明文。恶意插件、渲染器 XSS、剪贴板监控程序，或能够访问运行中应用的进程，都可能读取已解锁的 Secret。口令遗失后无法恢复加密内容。
+
+## 数据与备份
+
+秘密库数据通过思源插件数据 API 保存为 `vault.json`。文档引用只保存 Secret ID 和用于索引的公开属性，不会把加密内容复制到文档块中。
+
+请按常规方式备份工作空间。若希望恢复后文档引用仍然有效，应同时保留秘密库数据和对应文档。
 
 ## 开发
 
-需要 Node.js 和 pnpm/npm：
+启动监听构建：
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
-将生成的 `dev/` 目录链接或复制到工作空间：
+开发构建输出到 `dev/`。请将该目录链接或复制到：
 
 ```text
-<workspace>/data/plugins/siyuan-secret-vault
+<工作空间>/data/plugins/siyuan-secret-vault
 ```
 
-生产构建：
+常用命令：
 
 ```bash
-npm run build
+pnpm check   # TypeScript 与 Svelte 诊断
+pnpm build   # 生产构建并生成 package.zip
 ```
 
-会生成 `dist/` 和 `package.zip`。
+模块边界和并发一致性设计见 [ARCHITECTURE.md](ARCHITECTURE.md)，版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 本版本验证状态
+## 许可证
 
-已完成：
-
-- TypeScript strict 静态检查。
-- 使用本地 Svelte 5.48 编译器对 `VaultApp.svelte` 进行编译检查，无 warning。
-- PBKDF2 + AES-GCM 加解密 round-trip。
-- Vault 生命周期测试：default 首次设口令、错误口令拒绝、创建/读取秘密、锁定、修改口令、不同 group 独立口令、重新初始化后 key 不残留。
-- embed JavaScript 语法检查。
-
-当前执行环境无法拉取 npm 依赖，因此没有在这里完成完整 `npm install && npm run build`。源码依赖版本按上游 Svelte 5 模板配置；请在实际开发机上安装依赖后构建。
-
-## 需要在真实 SiYuan 3.8.0 中重点验证
-
-1. `protyle.insert(<iframe> + IAL)` 是否稳定生成 `NodeIFrame`，以及 IAL 是否落在该 iframe block 上。
-2. IFrame Block 在复制、移动、撤销/重做、导出以及移动端/浏览器前端的行为。
-3. `switch-protyle` / `loaded-protyle-static` 在多窗口场景下对“最近活动文档”的选择是否符合预期。
-4. 大量 IFrame 引用时的 renderer 资源占用。
-
-本版本刻意不通过 DOM 扫描来修复上述问题；如果 IAL 不稳定，应改为在插入 API 返回 block ID 后调用 `setBlockAttrs`，而不是监听和改写 Protyle DOM。
-
-## v0.1.1 交互入口
-
-- 顶栏按钮打开 Vault 自定义页签。
-- 编辑器输入 `/secret`、`/秘密`、`/插入秘密` 等可打开 Secret 选择器，并在当前编辑器位置插入 IFrame 引用。
-- Custom Tab ID 严格使用 `plugin.name + TAB_TYPE`，与 SiYuan `addTab/openTab` 约定保持一致。
-
-## 0.1.2 插入修复
-
-- Slash 命令不再使用 `protyle.insert(iframe + IAL)`；该调用受当前光标/内联解析上下文影响，会把块 IAL 当作普通段落文本。
-- Slash 回调会立即用 `Lute.Carte` 消费 `/secret` 查询文本，然后通过 `/api/block/insertBlock` 插入独立 `<iframe>`，并检查返回 DOM 必须为 `NodeIFrame`。
-- 新块 ID 返回后再单独调用 `/api/attr/setBlockAttrs` 写入 `custom-secret-*` 索引属性，避免 IAL 与 iframe 一起解析。
-- 新增“新建秘密并插入” Slash 命令；可直接在文档中选择分组、填写明文 label 和待加密 content。若分组锁定，会在保存时请求该分组口令。
-- “插入已有秘密”选择器顶部也提供“+ 新建秘密并插入”。
+MIT
