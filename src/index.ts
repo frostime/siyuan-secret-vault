@@ -205,7 +205,7 @@ export default class SecretVaultPlugin extends Plugin {
     if (!secret) throw new Error("秘密不存在");
 
     const src = `/plugins/${this.name}/embed/index.html?secret=${encodeURIComponent(secret.id)}`;
-    const iframe = `<iframe src="${src}" style="width: 100%; height: 132px; border: 0; border-radius: 8px;"></iframe>`;
+    const iframe = `<iframe src="${src}" style="width: 100%; height: 54px; border: 0; border-radius: 6px;"></iframe>`;
 
     const inserted = await insertMarkdownBlock(iframe, target);
 

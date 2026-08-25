@@ -13,31 +13,45 @@
         <strong id="label">Secret</strong>
         <span id="meta">连接中…</span>
       </div>
-      <span id="status" class="status">•••</span>
+
+      <div class="header-actions">
+        <button id="unlock" class="primary-action" type="button" hidden>解锁</button>
+        <span id="status" class="status">•••</span>
+      </div>
     </div>
 
     <pre id="content" class="content" hidden></pre>
 
-    <div id="locked" class="locked" hidden>
-      <span>内容已锁定</span>
-      <button id="unlock" type="button">解锁</button>
-    </div>
-
     <div id="editor" class="editor" hidden>
-      <input id="edit-label" class="edit-label" type="text" autocomplete="off" placeholder="Label" />
-      <textarea id="edit-content" class="edit-content" rows="5" spellcheck="false"></textarea>
+      <input
+        id="edit-label"
+        class="edit-label"
+        type="text"
+        autocomplete="off"
+        placeholder="Label"
+      />
+      <textarea
+        id="edit-content"
+        class="edit-content"
+        rows="5"
+        spellcheck="false"
+      ></textarea>
+
       <div class="editor-actions">
-        <button id="save" type="button">保存</button>
         <button id="cancel" type="button">取消</button>
+        <button id="save" class="primary-action" type="button">保存</button>
       </div>
     </div>
 
-    <div id="error" class="error" hidden></div>
+    <div id="error" class="error" hidden>
+      <span id="error-text"></span>
+      <button id="retry" type="button" hidden>重试</button>
+    </div>
 
-    <div id="actions" class="actions">
+    <div id="actions" class="actions" hidden>
       <button id="edit" type="button">编辑</button>
       <button id="copy" type="button">复制</button>
-      <button id="lock" type="button">锁定分组</button>
+      <button id="lock" type="button">锁定</button>
     </div>
   </main>
 
