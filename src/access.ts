@@ -13,33 +13,61 @@ interface GroupAccessState {
  * Owns all runtime-only authorization state.
  *
  * A cached group key is shared internally, but a context may use it only after
- * that context has independently authenticated. When the last authorized
- * context disappears, the CryptoKey reference is released as well.
+ * that context has independently authenticated. Context lifecycle is enforced
+ * here as well: once a context is released it cannot be authorized again.
  */
 export class GroupAccessManager {
   private readonly groups = new Map<GroupId, GroupAccessState>();
+  private readonly activeContexts = new Set<AccessContextId>();
+  private readonly releasedContexts = new Set<AccessContextId>();
 
   constructor(
     private readonly idleTimeoutMs: number,
     private readonly onIdleExpired: (contextId: AccessContextId, groupId: GroupId) => void,
   ) {}
 
-  isAuthorized(contextId: AccessContextId, groupId: GroupId): boolean {
-    return this.groups.get(groupId)?.contexts.has(contextId) ?? false;
+  activateContext(contextId: AccessContextId): void {
+    if (this.releasedContexts.has(contextId)) {
+      throw new Error("访问上下文已经失效");
+    }
+    this.activeContexts.add(contextId);
   }
 
-  authorize(contextId: AccessContextId, groupId: GroupId, key: CryptoKey): void {
+  isContextActive(contextId: AccessContextId): boolean {
+    return this.activeContexts.has(contextId);
+  }
+
+  assertContextActive(contextId: AccessContextId): void {
+    if (!this.isContextActive(contextId)) {
+      throw new Error("当前文档已经关闭");
+    }
+  }
+
+  isAuthorized(contextId: AccessContextId, groupId: GroupId): boolean {
+    return this.activeContexts.has(contextId)
+      && (this.groups.get(groupId)?.contexts.has(contextId) ?? false);
+  }
+
+  /**
+   * Grants access only if the context is still alive at the authorization
+   * boundary. Returning false prevents an async unlock from resurrecting a
+   * Protyle that was destroyed while key derivation was in flight.
+   */
+  authorize(contextId: AccessContextId, groupId: GroupId, key: CryptoKey): boolean {
+    if (!this.activeContexts.has(contextId)) return false;
+
     let state = this.groups.get(groupId);
     if (!state) {
       state = { key, contexts: new Map() };
       this.groups.set(groupId, state);
     } else {
-      // The caller has already verified this newly derived key against the
-      // persisted verifier, so replacing the equivalent in-memory key is safe.
+      // The caller has already verified this key against the committed group
+      // verifier. Equivalent derived keys may therefore share one cache slot.
       state.key = key;
     }
 
     this.scheduleIdleLock(state, contextId, groupId);
+    return true;
   }
 
   getAuthorizedKey(
@@ -48,7 +76,7 @@ export class GroupAccessManager {
     options: { touch?: boolean } = {},
   ): CryptoKey {
     const state = this.groups.get(groupId);
-    if (!state?.contexts.has(contextId)) {
+    if (!this.activeContexts.has(contextId) || !state?.contexts.has(contextId)) {
       throw new Error("该分组在当前窗口尚未解锁");
     }
 
@@ -59,11 +87,13 @@ export class GroupAccessManager {
   }
 
   peekAuthorizedKey(contextId: AccessContextId, groupId: GroupId): CryptoKey | null {
+    if (!this.activeContexts.has(contextId)) return null;
     const state = this.groups.get(groupId);
     return state?.contexts.has(contextId) ? state.key : null;
   }
 
   touch(contextId: AccessContextId, groupId: GroupId): void {
+    if (!this.activeContexts.has(contextId)) return;
     const state = this.groups.get(groupId);
     if (!state?.contexts.has(contextId)) return;
     this.scheduleIdleLock(state, contextId, groupId);
@@ -93,31 +123,44 @@ export class GroupAccessManager {
   }
 
   /**
-   * Password changes invalidate every other context because their prior
-   * authorization was established against the old password-derived key.
+   * Password changes revoke every authorization established against the old
+   * password. The initiating context keeps access only if it is still alive
+   * when the persisted password change commits.
    */
   replaceKeyKeepingContext(
     groupId: GroupId,
     contextId: AccessContextId,
     key: CryptoKey,
-  ): void {
+  ): boolean {
     const previous = this.groups.get(groupId);
+    const keepContext = this.activeContexts.has(contextId)
+      && (previous?.contexts.has(contextId) ?? false);
+
     if (previous) this.clearGroupState(previous);
+    this.groups.delete(groupId);
+
+    // A manual lock or context release that happens while saveData is in
+    // flight wins over the earlier password-change request.
+    if (!keepContext) return false;
 
     const next: GroupAccessState = { key, contexts: new Map() };
     this.groups.set(groupId, next);
     this.scheduleIdleLock(next, contextId, groupId);
+    return true;
   }
 
   releaseContext(contextId: AccessContextId): GroupId[] {
-    const released: GroupId[] = [];
+    if (!this.activeContexts.delete(contextId)) return [];
+    this.releasedContexts.add(contextId);
 
+    const released: GroupId[] = [];
     for (const groupId of [...this.groups.keys()]) {
       if (this.lock(contextId, groupId)) released.push(groupId);
     }
     return released;
   }
 
+  /** Clears grants and key references while keeping live context identities. */
   clearAll(): boolean {
     if (this.groups.size === 0) return false;
 
@@ -128,11 +171,19 @@ export class GroupAccessManager {
     return true;
   }
 
+  dispose(): void {
+    this.clearAll();
+    this.activeContexts.clear();
+    this.releasedContexts.clear();
+  }
+
   private scheduleIdleLock(
     state: GroupAccessState,
     contextId: AccessContextId,
     groupId: GroupId,
   ): void {
+    if (!this.activeContexts.has(contextId)) return;
+
     const previous = state.contexts.get(contextId);
     if (previous) clearTimeout(previous.idleTimer);
 

@@ -46,7 +46,19 @@ export default class SecretVaultPlugin extends Plugin {
     await this.vault.initialize();
 
     this.broker = new EmbedBroker(this.vault, {
-      resolveContext: (source) => this.contexts.resolveEmbed(source)?.contextId ?? null,
+      resolveContext: (source) => {
+        const contextId = this.contexts.resolveEmbed(source)?.contextId ?? null;
+        if (!contextId) return null;
+
+        try {
+          this.vault.activateContext(contextId);
+          return contextId;
+        } catch {
+          // A late message from a just-destroyed Protyle must not reactivate
+          // the released access context.
+          return null;
+        }
+      },
       requestUnlock: (contextId, groupId) => this.dialogs.requestUnlock(contextId, groupId),
       resizeEmbed: (source, height) => this.contexts.resizeEmbed(source, height),
     });
@@ -141,7 +153,7 @@ export default class SecretVaultPlugin extends Plugin {
         html: `<div class="b3-list-item__first"><span class="b3-list-item__text">新建秘密并插入</span><span class="b3-list-item__meta">🔐 +</span></div>`,
         id: "create-secret-and-insert",
         callback: (protyle: Protyle, nodeElement: HTMLElement) => {
-          this.contexts.capture(protyle);
+          this.captureContext(protyle);
           this.dialogs.openCreateSecret(
             protyle,
             this.references.captureSlashTarget(protyle, nodeElement),
@@ -161,7 +173,7 @@ export default class SecretVaultPlugin extends Plugin {
         html: `<div class="b3-list-item__first"><span class="b3-list-item__text">插入已有秘密</span><span class="b3-list-item__meta">🔐 ↗</span></div>`,
         id: "insert-secret-reference",
         callback: (protyle: Protyle, nodeElement: HTMLElement) => {
-          this.contexts.capture(protyle);
+          this.captureContext(protyle);
           this.dialogs.openSecretPicker(
             protyle,
             this.references.captureSlashTarget(protyle, nodeElement),
@@ -175,7 +187,7 @@ export default class SecretVaultPlugin extends Plugin {
     event: CustomEvent<{ protyle?: Protyle }>,
   ): void => {
     const protyle = event.detail?.protyle;
-    if (protyle) this.contexts.capture(protyle);
+    if (protyle) this.captureContext(protyle);
   };
 
   private readonly destroyProtyle = (
@@ -187,6 +199,11 @@ export default class SecretVaultPlugin extends Plugin {
     const contextId = this.contexts.release(protyle);
     if (contextId) this.vault.releaseContext(contextId);
   };
+
+  private captureContext(protyle: Protyle): void {
+    const contextId = this.contexts.capture(protyle);
+    this.vault.activateContext(contextId);
+  }
 
   private openVault(): void {
     openTab({

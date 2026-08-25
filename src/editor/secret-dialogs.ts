@@ -103,7 +103,12 @@ export class SecretDialogs {
         button.addEventListener("click", async () => {
           button.disabled = true;
           try {
-            await this.references.insertFromSlash(secret, slashTarget);
+            // The picker snapshot is intentionally static while the dialog is
+            // open, but the selected Secret must still exist at commit time.
+            const currentSecret = this.vault.getSecret(secret.id);
+            if (!currentSecret) throw new Error("该秘密已被删除");
+
+            await this.references.insertFromSlash(currentSecret, slashTarget);
             dialog.destroy();
           } catch (error) {
             button.disabled = false;

@@ -8,6 +8,7 @@ import {
   encryptSecretContent,
   verifyGroupKey,
 } from "./crypto";
+import { VaultMutationCoordinator } from "./mutation-coordinator";
 import type {
   AccessContextId,
   GroupId,
@@ -19,6 +20,7 @@ import type {
   VaultInvalidation,
   VaultSnapshot,
 } from "./types";
+import { VAULT_CONTEXT_ID } from "./types";
 
 const STORAGE_FILE = "vault.json";
 const DEFAULT_GROUP_ID = "default";
@@ -65,56 +67,72 @@ function makeId(prefix: string): string {
 }
 
 /**
- * Owns persisted vault data and the crypto operations that interpret it.
+ * Owns committed vault data and the crypto operations that interpret it.
+ *
+ * Persistent mutations are staged on a detached VaultData copy and serialized
+ * by VaultMutationCoordinator. `this.data` therefore always represents the
+ * last successfully persisted state; readers never observe half-committed KDF
+ * or ciphertext changes.
  *
  * Runtime authorization is delegated to GroupAccessManager. Public operations
- * always receive an AccessContextId, making it impossible for a caller to
- * accidentally treat "a key exists in memory" as "this window is unlocked".
+ * receive an AccessContextId so "a key exists" never implies "this window is
+ * authorized".
  */
 export class VaultController {
   private data: VaultData = emptyVault();
   private readonly access: GroupAccessManager;
+  private readonly mutations = new VaultMutationCoordinator();
   private revision = 0;
   private readonly snapshotSubscriptions = new Set<SnapshotSubscription>();
   private readonly invalidationListeners = new Set<InvalidationListener>();
-  private persistChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly plugin: Plugin) {
     this.access = new GroupAccessManager(
       AUTO_LOCK_IDLE_MS,
       (contextId, groupId) => this.publish({ scope: "context-group", contextId, groupId }),
     );
+    this.access.activateContext(VAULT_CONTEXT_ID);
   }
 
   async initialize(): Promise<void> {
-    const loaded = await this.readStoredVault();
-    this.data = loaded ?? emptyVault();
+    await this.mutations.runExclusive(async () => {
+      const loaded = await this.readStoredVault();
+      const next = loaded ?? emptyVault();
+      const needsPersist = !loaded || this.ensureDefaultGroup(next);
 
-    if (this.ensureDefaultGroup()) {
-      await this.persist();
-    } else if (!loaded) {
-      await this.persist();
-    }
+      if (needsPersist) {
+        await this.persist(next);
+      }
 
-    this.publish({ scope: "all" });
+      this.data = next;
+      this.publish({ scope: "all" });
+    });
   }
 
   async reloadFromStorage(): Promise<void> {
-    this.access.clearAll();
-    const loaded = await this.readStoredVault();
-    if (loaded) this.data = loaded;
+    await this.mutations.runExclusive(async () => {
+      const loaded = await this.readStoredVault();
+      const next = loaded ?? cloneVault(this.data);
 
-    if (this.ensureDefaultGroup()) {
-      await this.persist();
-    }
+      if (this.ensureDefaultGroup(next)) {
+        await this.persist(next);
+      }
 
-    this.publish({ scope: "all" });
+      this.data = next;
+      this.access.clearAll();
+      this.publish({ scope: "all" });
+    });
   }
 
   dispose(): void {
-    this.access.clearAll();
+    this.mutations.close();
+    this.access.dispose();
     this.snapshotSubscriptions.clear();
     this.invalidationListeners.clear();
+  }
+
+  activateContext(contextId: AccessContextId): void {
+    this.access.activateContext(contextId);
   }
 
   subscribe(contextId: AccessContextId, listener: SnapshotListener): () => void {
@@ -181,36 +199,40 @@ export class VaultController {
     name: string,
     password: string,
   ): Promise<GroupId> {
-    const normalizedName = name.trim();
-    if (!normalizedName) throw new Error("分组名称不能为空");
-    if (!password) throw new Error("口令不能为空");
-    if (this.data.groups.some((group) => group.name.toLowerCase() === normalizedName.toLowerCase())) {
-      throw new Error("分组名称已存在");
-    }
+    return this.mutations.runExclusive(async () => {
+      this.access.assertContextActive(contextId);
 
-    const now = Date.now();
-    const group: SecretGroup = {
-      id: makeId("grp"),
-      name: normalizedName,
-      createdAt: now,
-      updatedAt: now,
-      kdf: createKdf(),
-      verifier: null,
-    };
-    const key = await deriveGroupKey(password, group.kdf);
-    group.verifier = await createVerifier(key, group.id);
+      const normalizedName = name.trim();
+      if (!normalizedName) throw new Error("分组名称不能为空");
+      if (!password) throw new Error("口令不能为空");
 
-    this.data.groups.push(group);
-    try {
-      await this.persist();
-    } catch (error) {
-      this.data.groups = this.data.groups.filter((item) => item.id !== group.id);
-      throw error;
-    }
+      const next = cloneVault(this.data);
+      if (next.groups.some((group) => group.name.toLowerCase() === normalizedName.toLowerCase())) {
+        throw new Error("分组名称已存在");
+      }
 
-    this.access.authorize(contextId, group.id, key);
-    this.publish();
-    return group.id;
+      const now = Date.now();
+      const group: SecretGroup = {
+        id: makeId("grp"),
+        name: normalizedName,
+        createdAt: now,
+        updatedAt: now,
+        kdf: createKdf(),
+        verifier: null,
+      };
+      const key = await deriveGroupKey(password, group.kdf);
+      group.verifier = await createVerifier(key, group.id);
+
+      // Do not begin a persistent write for a Protyle that disappeared while
+      // PBKDF2/verifier work was in flight.
+      this.access.assertContextActive(contextId);
+      next.groups.push(group);
+      await this.persistAndCommit(next);
+
+      this.access.authorize(contextId, group.id, key);
+      this.publish();
+      return group.id;
+    });
   }
 
   async unlockGroup(
@@ -218,30 +240,42 @@ export class VaultController {
     groupId: GroupId,
     password: string,
   ): Promise<void> {
-    const group = this.requireGroup(groupId);
-    const key = await deriveGroupKey(password, group.kdf);
+    await this.mutations.runExclusive(async () => {
+      this.access.assertContextActive(contextId);
 
-    if (group.verifier) {
-      if (!(await verifyGroupKey(key, group.id, group.verifier))) {
-        throw new Error("口令错误");
+      const group = this.requireGroup(groupId);
+      const key = await deriveGroupKey(password, group.kdf);
+      let initializedNow = false;
+
+      if (group.verifier) {
+        if (!(await verifyGroupKey(key, group.id, group.verifier))) {
+          throw new Error("口令错误");
+        }
+      } else {
+        const verifier = await createVerifier(key, group.id);
+
+        // A second unlock or any other persistent mutation cannot interleave
+        // here because the complete unlock lifecycle owns the mutation queue.
+        this.access.assertContextActive(contextId);
+        const next = cloneVault(this.data);
+        const nextGroup = this.requireGroup(groupId, next);
+        nextGroup.verifier = verifier;
+        nextGroup.updatedAt = Date.now();
+        await this.persistAndCommit(next);
+        initializedNow = true;
       }
-    } else {
-      const previousUpdatedAt = group.updatedAt;
-      const verifier = await createVerifier(key, group.id);
-      group.verifier = verifier;
-      group.updatedAt = Date.now();
 
-      try {
-        await this.persist();
-      } catch (error) {
-        group.verifier = null;
-        group.updatedAt = previousUpdatedAt;
-        throw error;
+      if (!this.access.authorize(contextId, groupId, key)) {
+        if (initializedNow) this.publish();
+        throw new Error(
+          initializedNow
+            ? "当前文档已经关闭；分组口令已初始化，但未保留解锁状态"
+            : "当前文档已经关闭",
+        );
       }
-    }
 
-    this.access.authorize(contextId, groupId, key);
-    this.publish({ scope: "context-group", contextId, groupId });
+      this.publish({ scope: "context-group", contextId, groupId });
+    });
   }
 
   lockGroup(contextId: AccessContextId, groupId: GroupId): void {
@@ -263,89 +297,70 @@ export class VaultController {
     groupId: GroupId,
     newPassword: string,
   ): Promise<void> {
-    if (!newPassword) throw new Error("新口令不能为空");
+    await this.mutations.runExclusive(async () => {
+      if (!newPassword) throw new Error("新口令不能为空");
 
-    const group = this.requireGroup(groupId);
-    const oldKey = this.access.getAuthorizedKey(contextId, groupId);
-    const groupSecrets = this.data.secrets.filter((secret) => secret.groupId === groupId);
+      const next = cloneVault(this.data);
+      const group = this.requireGroup(groupId, next);
+      const oldKey = this.access.getAuthorizedKey(contextId, groupId);
+      const groupSecrets = next.secrets.filter((secret) => secret.groupId === groupId);
 
-    const plaintexts = new Map<SecretId, string>();
-    for (const secret of groupSecrets) {
-      plaintexts.set(
-        secret.id,
-        await decryptSecretContent(oldKey, groupId, secret.id, secret.encryptedContent),
-      );
-    }
-
-    const newKdf = createKdf();
-    const newKey = await deriveGroupKey(newPassword, newKdf);
-    const newVerifier = await createVerifier(newKey, groupId);
-    const stagedPayloads = new Map<SecretId, SecretRecord["encryptedContent"]>();
-
-    for (const secret of groupSecrets) {
-      stagedPayloads.set(
-        secret.id,
-        await encryptSecretContent(newKey, groupId, secret.id, plaintexts.get(secret.id)!),
-      );
-    }
-
-    const oldGroupState = {
-      kdf: group.kdf,
-      verifier: group.verifier,
-      updatedAt: group.updatedAt,
-    };
-    const oldSecretState = groupSecrets.map((secret) => ({
-      secret,
-      encryptedContent: secret.encryptedContent,
-      updatedAt: secret.updatedAt,
-    }));
-
-    group.kdf = newKdf;
-    group.verifier = newVerifier;
-    group.updatedAt = Date.now();
-    for (const secret of groupSecrets) {
-      secret.encryptedContent = stagedPayloads.get(secret.id)!;
-      secret.updatedAt = Date.now();
-    }
-
-    try {
-      await this.persist();
-    } catch (error) {
-      group.kdf = oldGroupState.kdf;
-      group.verifier = oldGroupState.verifier;
-      group.updatedAt = oldGroupState.updatedAt;
-      for (const previous of oldSecretState) {
-        previous.secret.encryptedContent = previous.encryptedContent;
-        previous.secret.updatedAt = previous.updatedAt;
+      const plaintexts = new Map<SecretId, string>();
+      for (const secret of groupSecrets) {
+        plaintexts.set(
+          secret.id,
+          await decryptSecretContent(oldKey, groupId, secret.id, secret.encryptedContent),
+        );
       }
-      throw error;
-    }
 
-    // Other contexts authenticated using the old password, so changing the
-    // password deliberately revokes them. The initiating context stays open.
-    this.access.replaceKeyKeepingContext(groupId, contextId, newKey);
-    this.publish({ scope: "group", groupId });
+      const newKdf = createKdf();
+      const newKey = await deriveGroupKey(newPassword, newKdf);
+      const newVerifier = await createVerifier(newKey, groupId);
+
+      for (const secret of groupSecrets) {
+        secret.encryptedContent = await encryptSecretContent(
+          newKey,
+          groupId,
+          secret.id,
+          plaintexts.get(secret.id)!,
+        );
+        secret.updatedAt = Date.now();
+      }
+
+      group.kdf = newKdf;
+      group.verifier = newVerifier;
+      group.updatedAt = Date.now();
+
+      // Lock/context destruction is runtime-only and may occur while crypto is
+      // running, so re-check authorization immediately before persistence.
+      this.access.getAuthorizedKey(contextId, groupId, { touch: false });
+      await this.persistAndCommit(next);
+
+      // Always revoke old-password grants. If the initiating context vanished
+      // while saveData was in flight, the new key is simply not cached.
+      this.access.replaceKeyKeepingContext(groupId, contextId, newKey);
+      this.publish({ scope: "group", groupId });
+    });
   }
 
   async deleteGroup(groupId: GroupId): Promise<void> {
-    if (groupId === DEFAULT_GROUP_ID) throw new Error("default 分组不能删除");
-    if (this.data.secrets.some((secret) => secret.groupId === groupId)) {
-      throw new Error("分组仍包含秘密，请先删除或迁移这些秘密");
-    }
+    await this.mutations.runExclusive(async () => {
+      if (groupId === DEFAULT_GROUP_ID) throw new Error("default 分组不能删除");
 
-    const index = this.data.groups.findIndex((group) => group.id === groupId);
-    if (index < 0) throw new Error("分组不存在");
+      const next = cloneVault(this.data);
+      if (next.secrets.some((secret) => secret.groupId === groupId)) {
+        throw new Error("分组仍包含秘密，请先删除或迁移这些秘密");
+      }
 
-    const [removed] = this.data.groups.splice(index, 1);
-    try {
-      await this.persist();
-    } catch (error) {
-      this.data.groups.splice(index, 0, removed);
-      throw error;
-    }
+      const index = next.groups.findIndex((group) => group.id === groupId);
+      if (index < 0) throw new Error("分组不存在");
 
-    this.access.lockGroupEverywhere(groupId);
-    this.publish();
+      next.groups.splice(index, 1);
+      await this.persistAndCommit(next);
+
+      this.access.lockGroupEverywhere(groupId);
+      this.publish();
+    });
   }
 
   async createSecret(
@@ -354,32 +369,32 @@ export class VaultController {
     label: string,
     content: string,
   ): Promise<SecretId> {
-    const normalizedLabel = label.trim();
-    if (!normalizedLabel) throw new Error("label 不能为空");
+    return this.mutations.runExclusive(async () => {
+      const normalizedLabel = label.trim();
+      if (!normalizedLabel) throw new Error("label 不能为空");
 
-    this.requireGroup(groupId);
-    const key = this.access.getAuthorizedKey(contextId, groupId);
-    const secretId = makeId("sec");
-    const now = Date.now();
-    const record: SecretRecord = {
-      id: secretId,
-      groupId,
-      label: normalizedLabel,
-      encryptedContent: await encryptSecretContent(key, groupId, secretId, content),
-      createdAt: now,
-      updatedAt: now,
-    };
+      const next = cloneVault(this.data);
+      this.requireGroup(groupId, next);
+      const key = this.access.getAuthorizedKey(contextId, groupId);
+      const secretId = makeId("sec");
+      const now = Date.now();
+      const record: SecretRecord = {
+        id: secretId,
+        groupId,
+        label: normalizedLabel,
+        encryptedContent: await encryptSecretContent(key, groupId, secretId, content),
+        createdAt: now,
+        updatedAt: now,
+      };
 
-    this.data.secrets.push(record);
-    try {
-      await this.persist();
-    } catch (error) {
-      this.data.secrets = this.data.secrets.filter((secret) => secret.id !== secretId);
-      throw error;
-    }
+      // Manual lock or Protyle destruction may happen during encryption.
+      this.access.getAuthorizedKey(contextId, groupId, { touch: false });
+      next.secrets.push(record);
+      await this.persistAndCommit(next);
 
-    this.publish();
-    return secretId;
+      this.publish();
+      return secretId;
+    });
   }
 
   async getSecretView(
@@ -415,63 +430,51 @@ export class VaultController {
     label: string,
     content: string,
   ): Promise<void> {
-    const normalizedLabel = label.trim();
-    if (!normalizedLabel) throw new Error("label 不能为空");
+    await this.mutations.runExclusive(async () => {
+      const normalizedLabel = label.trim();
+      if (!normalizedLabel) throw new Error("label 不能为空");
 
-    const secret = this.requireSecret(secretId);
-    const key = this.access.getAuthorizedKey(contextId, secret.groupId);
-    const previous = {
-      label: secret.label,
-      encryptedContent: secret.encryptedContent,
-      updatedAt: secret.updatedAt,
-    };
+      const next = cloneVault(this.data);
+      const secret = this.requireSecret(secretId, next);
+      const key = this.access.getAuthorizedKey(contextId, secret.groupId);
 
-    secret.label = normalizedLabel;
-    secret.encryptedContent = await encryptSecretContent(
-      key,
-      secret.groupId,
-      secret.id,
-      content,
-    );
-    secret.updatedAt = Date.now();
+      secret.label = normalizedLabel;
+      secret.encryptedContent = await encryptSecretContent(
+        key,
+        secret.groupId,
+        secret.id,
+        content,
+      );
+      secret.updatedAt = Date.now();
 
-    try {
-      await this.persist();
-    } catch (error) {
-      secret.label = previous.label;
-      secret.encryptedContent = previous.encryptedContent;
-      secret.updatedAt = previous.updatedAt;
-      throw error;
-    }
-
-    this.publish({ scope: "secret", secretId });
+      this.access.getAuthorizedKey(contextId, secret.groupId, { touch: false });
+      await this.persistAndCommit(next);
+      this.publish({ scope: "secret", secretId });
+    });
   }
 
   async deleteSecret(contextId: AccessContextId, secretId: SecretId): Promise<void> {
-    const secret = this.requireSecret(secretId);
-    this.access.getAuthorizedKey(contextId, secret.groupId);
+    await this.mutations.runExclusive(async () => {
+      const next = cloneVault(this.data);
+      const secret = this.requireSecret(secretId, next);
+      this.access.getAuthorizedKey(contextId, secret.groupId);
 
-    const index = this.data.secrets.findIndex((item) => item.id === secretId);
-    const [removed] = this.data.secrets.splice(index, 1);
+      const index = next.secrets.findIndex((item) => item.id === secretId);
+      next.secrets.splice(index, 1);
+      await this.persistAndCommit(next);
 
-    try {
-      await this.persist();
-    } catch (error) {
-      this.data.secrets.splice(index, 0, removed);
-      throw error;
-    }
-
-    this.publish({ scope: "secret", secretId });
+      this.publish({ scope: "secret", secretId });
+    });
   }
 
-  private requireGroup(groupId: GroupId): SecretGroup {
-    const group = this.data.groups.find((item) => item.id === groupId);
+  private requireGroup(groupId: GroupId, data: VaultData = this.data): SecretGroup {
+    const group = data.groups.find((item) => item.id === groupId);
     if (!group) throw new Error("分组不存在");
     return group;
   }
 
-  private requireSecret(secretId: SecretId): SecretRecord {
-    const secret = this.data.secrets.find((item) => item.id === secretId);
+  private requireSecret(secretId: SecretId, data: VaultData = this.data): SecretRecord {
+    const secret = data.secrets.find((item) => item.id === secretId);
     if (!secret) throw new Error("秘密不存在");
     return secret;
   }
@@ -481,18 +484,20 @@ export class VaultController {
     return isVaultData(loaded) ? loaded : null;
   }
 
-  private ensureDefaultGroup(): boolean {
-    if (this.data.groups.some((group) => group.id === DEFAULT_GROUP_ID)) return false;
-    this.data.groups.unshift(makeDefaultGroup());
+  private ensureDefaultGroup(data: VaultData): boolean {
+    if (data.groups.some((group) => group.id === DEFAULT_GROUP_ID)) return false;
+    data.groups.unshift(makeDefaultGroup());
     return true;
   }
 
-  private async persist(): Promise<void> {
-    const snapshot = cloneVault(this.data);
-    this.persistChain = this.persistChain
-      .catch(() => undefined)
-      .then(() => this.plugin.saveData(STORAGE_FILE, snapshot));
-    await this.persistChain;
+  /** Persists a detached staged state, then atomically publishes it in memory. */
+  private async persistAndCommit(next: VaultData): Promise<void> {
+    await this.persist(next);
+    this.data = next;
+  }
+
+  private async persist(data: VaultData): Promise<void> {
+    await this.plugin.saveData(STORAGE_FILE, cloneVault(data));
   }
 
   private publish(invalidation?: VaultInvalidation): void {
