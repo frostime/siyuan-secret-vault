@@ -13,6 +13,7 @@ import { VaultController } from "./vault";
 import { EmbedBroker } from "./broker";
 import {
   deleteBlock,
+  getBlockKramdown,
   insertMarkdownBlock,
   setBlockAttrs,
   type BlockInsertionTarget,
@@ -26,7 +27,7 @@ type SvelteApp = ReturnType<typeof mount>;
 
 type SlashTarget = {
   target: BlockInsertionTarget;
-  anchorBlockId: string | null;
+  cleanupBlockId: string | null;
 };
 
 export default class SecretVaultPlugin extends Plugin {
@@ -35,6 +36,9 @@ export default class SecretVaultPlugin extends Plugin {
   private customTab!: () => Custom;
   private lastProtyle: Protyle | null = null;
   private brokerUnsubscribe: (() => void) | null = null;
+  private readonly protyleIds = new WeakMap<Protyle, string>();
+  private readonly sourceProtyleIds = new WeakMap<Window, string>();
+  private readonly unlockRequests = new Map<string, Promise<boolean>>();
 
   async onload(): Promise<void> {
     this.addIcons(`
@@ -45,8 +49,6 @@ export default class SecretVaultPlugin extends Plugin {
 
     this.controller = new VaultController(this, (secretId) => this.insertSecretReference(secretId));
 
-    // Register integrations before the first await. SiYuan can restore layout while
-    // asynchronous plugin initialization is still running.
     const plugin = this;
     this.customTab = this.addTab({
       type: TAB_TYPE,
@@ -67,6 +69,7 @@ export default class SecretVaultPlugin extends Plugin {
 
     this.eventBus.on("switch-protyle", this.captureProtyle);
     this.eventBus.on("loaded-protyle-static", this.captureProtyle);
+    this.eventBus.on("destroy-protyle", this.destroyProtyle);
 
     this.protyleSlash = [
       {
@@ -84,8 +87,7 @@ export default class SecretVaultPlugin extends Plugin {
         callback: (protyle: Protyle, nodeElement: HTMLElement) => {
           this.lastProtyle = protyle;
           const slashTarget = this.captureSlashTarget(protyle, nodeElement);
-          this.clearSlashQuery(protyle);
-          this.openCreateSecretDialog(protyle, slashTarget.target);
+          this.openCreateSecretDialog(protyle, slashTarget);
         },
       },
       {
@@ -103,8 +105,7 @@ export default class SecretVaultPlugin extends Plugin {
         callback: (protyle: Protyle, nodeElement: HTMLElement) => {
           this.lastProtyle = protyle;
           const slashTarget = this.captureSlashTarget(protyle, nodeElement);
-          this.clearSlashQuery(protyle);
-          this.openSecretPicker(protyle, slashTarget.target);
+          this.openSecretPicker(protyle, slashTarget);
         },
       },
     ];
@@ -113,11 +114,14 @@ export default class SecretVaultPlugin extends Plugin {
 
     this.broker = new EmbedBroker(
       this.controller,
-      (groupId, groupName, initialized) => this.requestUnlock(groupId, groupName, initialized),
-      (secretId) => this.openVault(secretId),
+      (groupId, groupName, initialized, protyleLeaseId) =>
+        this.requestUnlock(groupId, groupName, initialized, protyleLeaseId),
+      (source) => this.resolveProtyleLeaseForWindow(source),
     );
     this.broker.start();
-    this.brokerUnsubscribe = this.controller.subscribe(() => this.broker.invalidateAll());
+    this.brokerUnsubscribe = this.controller.subscribe(
+      (_snapshot, invalidation) => this.broker.invalidate(invalidation),
+    );
   }
 
   onLayoutReady(): void {
@@ -133,6 +137,7 @@ export default class SecretVaultPlugin extends Plugin {
   async onunload(): Promise<void> {
     this.eventBus.off("switch-protyle", this.captureProtyle);
     this.eventBus.off("loaded-protyle-static", this.captureProtyle);
+    this.eventBus.off("destroy-protyle", this.destroyProtyle);
     this.brokerUnsubscribe?.();
     this.brokerUnsubscribe = null;
     this.broker?.dispose();
@@ -145,7 +150,18 @@ export default class SecretVaultPlugin extends Plugin {
   }
 
   private readonly captureProtyle = (event: CustomEvent<{ protyle?: Protyle }>): void => {
-    if (event.detail?.protyle) this.lastProtyle = event.detail.protyle;
+    const protyle = event.detail?.protyle;
+    if (!protyle) return;
+    this.lastProtyle = protyle;
+    this.ensureProtyleId(protyle);
+  };
+
+  private readonly destroyProtyle = (event: CustomEvent<{ protyle?: Protyle }>): void => {
+    const protyle = event.detail?.protyle;
+    if (!protyle) return;
+    const protyleId = this.protyleIds.get(protyle);
+    if (protyleId) this.controller.releaseProtyle(protyleId);
+    if (this.lastProtyle === protyle) this.lastProtyle = null;
   };
 
   private openVault(secretId: string | null): void {
@@ -179,29 +195,20 @@ export default class SecretVaultPlugin extends Plugin {
     await this.insertSecretReferenceInto(secretId, protyle, target);
   }
 
-  /**
-   * Inserts a real SiYuan IFrame block through the kernel block API.
-   *
-   * Do NOT append a Kramdown IAL string to protyle.insert(): protyle.insert is
-   * caret/inline-context sensitive, so an iframe + block IAL can be parsed as
-   * paragraph text. Attributes are deliberately persisted in a second API call.
-   */
   private async insertSecretReferenceInto(
     secretId: string,
     _protyle: Protyle,
     target: BlockInsertionTarget,
+    cleanupBlockId: string | null = null,
   ): Promise<void> {
     const secret = this.controller.getSecret(secretId);
     if (!secret) throw new Error("秘密不存在");
 
     const src = `/plugins/${this.name}/embed/index.html?secret=${encodeURIComponent(secret.id)}`;
-    const iframe = `<iframe src="${src}" style="width: 100%; height: 180px; border: 0; border-radius: 8px;"></iframe>`;
+    const iframe = `<iframe src="${src}" style="width: 100%; height: 132px; border: 0; border-radius: 8px;"></iframe>`;
 
     const inserted = await insertMarkdownBlock(iframe, target);
 
-    // Standalone <iframe> is expected to become NodeIFrame. If a future SiYuan/Lute
-    // version changes that parsing rule, remove the unexpected block rather than
-    // leaving HTML/paragraph garbage in the user's document.
     if (inserted.dom && !inserted.dom.includes('data-type="NodeIFrame"')) {
       await deleteBlock(inserted.id).catch(() => undefined);
       throw new Error("思源没有把嵌入内容解析为 IFrame 块；已回滚此次插入");
@@ -219,6 +226,7 @@ export default class SecretVaultPlugin extends Plugin {
       throw error;
     }
 
+    if (cleanupBlockId) await this.cleanupSlashBlock(cleanupBlockId);
     showMessage(`已插入秘密：${secret.label}`);
   }
 
@@ -226,29 +234,39 @@ export default class SecretVaultPlugin extends Plugin {
     const anchorBlockId = nodeElement.dataset.nodeId || null;
     if (!anchorBlockId) {
       return {
-        anchorBlockId: null,
+        cleanupBlockId: null,
         target: this.resolveEditorInsertionTarget(protyle),
       };
     }
 
-    // Slash commands are normally entered in a fresh paragraph. In that common
-    // case insert *before* the slash paragraph, so after clearing /secret the empty
-    // paragraph naturally remains below the IFrame as a caret continuation block.
-    const text = (nodeElement.textContent ?? "").trim();
+    const editable = nodeElement.querySelector<HTMLElement>('[contenteditable="true"]');
+    const text = (editable?.textContent ?? nodeElement.textContent ?? "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .trim();
     const isSlashOnlyParagraph = /^\/\S*$/.test(text);
+
     return {
-      anchorBlockId,
+      cleanupBlockId: isSlashOnlyParagraph ? anchorBlockId : null,
       target: isSlashOnlyParagraph
         ? { nextID: anchorBlockId }
         : { previousID: anchorBlockId },
     };
   }
 
-  private clearSlashQuery(protyle: Protyle): void {
-    const lute = (globalThis as typeof globalThis & { Lute?: { Carte?: string } }).Lute;
-    // Lute.Carte is SiYuan's editor sentinel for consuming the active slash query
-    // without inserting visible content. Empty string is only a defensive fallback.
-    protyle.insert(typeof lute?.Carte === "string" ? lute.Carte : "");
+  private async cleanupSlashBlock(blockId: string): Promise<void> {
+    try {
+      const kramdown = await getBlockKramdown(blockId);
+      const source = kramdown
+        .replace(/\n?\{:[\s\S]*$/, "")
+        .replace(/[\u200B-\u200D\uFEFF]/g, "")
+        .trim();
+
+      if (/^\/\S*$/.test(source)) {
+        await deleteBlock(blockId);
+      }
+    } catch (error) {
+      console.warn("[secret-vault] failed to clean slash source block", blockId, error);
+    }
   }
 
   private resolveEditorInsertionTarget(protyle: Protyle): BlockInsertionTarget {
@@ -256,6 +274,7 @@ export default class SecretVaultPlugin extends Plugin {
     const anchorNode = selection?.anchorNode ?? null;
     const element = anchorNode instanceof Element ? anchorNode : anchorNode?.parentElement ?? null;
     const selectedBlock = element?.closest<HTMLElement>("[data-node-id]");
+
     if (selectedBlock?.dataset.nodeId && protyle.wysiwyg.element.contains(selectedBlock)) {
       return { previousID: selectedBlock.dataset.nodeId };
     }
@@ -263,7 +282,7 @@ export default class SecretVaultPlugin extends Plugin {
     throw new Error("无法确定插入位置");
   }
 
-  private openSecretPicker(protyle: Protyle, target: BlockInsertionTarget): void {
+  private openSecretPicker(protyle: Protyle, slashTarget: SlashTarget): void {
     const snapshot = this.controller.getSnapshot();
     const groups = new Map(snapshot.groups.map((group) => [group.id, group.name]));
 
@@ -287,14 +306,16 @@ export default class SecretVaultPlugin extends Plugin {
 
     create.addEventListener("click", () => {
       dialog.destroy();
-      this.openCreateSecretDialog(protyle, target);
+      this.openCreateSecretDialog(protyle, slashTarget);
     });
 
     const render = () => {
       const q = search.value.trim().toLowerCase();
       const matches = snapshot.secrets.filter((secret) => {
         const groupName = groups.get(secret.groupId) ?? secret.groupId;
-        return !q || secret.label.toLowerCase().includes(q) || groupName.toLowerCase().includes(q);
+        return !q
+          || secret.label.toLowerCase().includes(q)
+          || groupName.toLowerCase().includes(q);
       });
 
       list.replaceChildren();
@@ -308,6 +329,7 @@ export default class SecretVaultPlugin extends Plugin {
 
         const first = document.createElement("span");
         first.className = "b3-list-item__first";
+
         const text = document.createElement("span");
         text.className = "b3-list-item__text";
         text.textContent = secret.label;
@@ -318,16 +340,27 @@ export default class SecretVaultPlugin extends Plugin {
         meta.textContent = groups.get(secret.groupId) ?? secret.groupId;
 
         button.append(first, meta);
+
         button.addEventListener("click", async () => {
           button.disabled = true;
           try {
-            await this.insertSecretReferenceInto(secret.id, protyle, target);
+            await this.insertSecretReferenceInto(
+              secret.id,
+              protyle,
+              slashTarget.target,
+              slashTarget.cleanupBlockId,
+            );
             dialog.destroy();
           } catch (error) {
             button.disabled = false;
-            showMessage(error instanceof Error ? error.message : String(error), 5000, "error");
+            showMessage(
+              error instanceof Error ? error.message : String(error),
+              5000,
+              "error",
+            );
           }
         });
+
         list.appendChild(button);
       }
     };
@@ -344,7 +377,7 @@ export default class SecretVaultPlugin extends Plugin {
     setTimeout(() => search.focus(), 0);
   }
 
-  private openCreateSecretDialog(protyle: Protyle, target: BlockInsertionTarget): void {
+  private openCreateSecretDialog(protyle: Protyle, slashTarget: SlashTarget): void {
     const snapshot = this.controller.getSnapshot();
     if (snapshot.groups.length === 0) {
       showMessage("没有可用分组", 5000, "error");
@@ -352,7 +385,12 @@ export default class SecretVaultPlugin extends Plugin {
     }
 
     const groupOptions = snapshot.groups
-      .map((group) => `<option value="${this.escapeHtml(group.id)}">${this.escapeHtml(group.name)}${group.unlocked ? " · 已解锁" : " · 已锁定"}</option>`)
+      .map((group) => (
+        `<option value="${this.escapeHtml(group.id)}">`
+        + `${this.escapeHtml(group.name)}`
+        + `${group.unlocked ? " · 已解锁" : " · 已锁定"}`
+        + "</option>"
+      ))
       .join("");
 
     const dialog = new Dialog({
@@ -372,7 +410,9 @@ export default class SecretVaultPlugin extends Plugin {
             <span>Content（加密）</span>
             <textarea class="b3-text-field fn__block" rows="10" spellcheck="false" placeholder="要加密保存的内容" data-secret-create-content></textarea>
           </label>
-          <div class="secret-vault-create-inline__hint">若所选分组尚未解锁，保存时会要求输入该分组口令；口令不会持久化。</div>
+          <div class="secret-vault-create-inline__hint">
+            若所选分组尚未解锁，保存时会要求输入该分组口令；口令不会持久化。
+          </div>
           <div data-secret-create-error class="vault-error fn__none"></div>
         </div>
         <div class="b3-dialog__action">
@@ -389,11 +429,16 @@ export default class SecretVaultPlugin extends Plugin {
     const cancel = dialog.element.querySelector<HTMLButtonElement>("[data-secret-create-cancel]")!;
 
     const submit = async () => {
-      const group = this.controller.getSnapshot().groups.find((item) => item.id === groupSelect.value);
+      const group = this.controller
+        .getSnapshot()
+        .groups
+        .find((item) => item.id === groupSelect.value);
+
       if (!group) {
         this.setInlineError(error, "分组不存在");
         return;
       }
+
       const label = labelInput.value.trim();
       if (!label) {
         this.setInlineError(error, "label 不能为空");
@@ -403,16 +448,37 @@ export default class SecretVaultPlugin extends Plugin {
 
       ok.disabled = true;
       this.setInlineError(error, "");
+
       try {
         if (!this.controller.isGroupUnlocked(group.id)) {
-          const unlocked = await this.requestUnlock(group.id, group.name, group.initialized);
+          const unlocked = await this.requestUnlock(
+            group.id,
+            group.name,
+            group.initialized,
+            this.ensureProtyleId(protyle),
+          );
           if (!unlocked) return;
         }
-        const secretId = await this.controller.createSecret(group.id, label, contentInput.value);
-        await this.insertSecretReferenceInto(secretId, protyle, target);
+
+        const secretId = await this.controller.createSecret(
+          group.id,
+          label,
+          contentInput.value,
+        );
+
+        await this.insertSecretReferenceInto(
+          secretId,
+          protyle,
+          slashTarget.target,
+          slashTarget.cleanupBlockId,
+        );
+
         dialog.destroy();
       } catch (createError) {
-        this.setInlineError(error, createError instanceof Error ? createError.message : String(createError));
+        this.setInlineError(
+          error,
+          createError instanceof Error ? createError.message : String(createError),
+        );
       } finally {
         ok.disabled = false;
       }
@@ -420,12 +486,19 @@ export default class SecretVaultPlugin extends Plugin {
 
     ok.addEventListener("click", () => void submit());
     cancel.addEventListener("click", () => dialog.destroy());
+
     labelInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void submit();
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        void submit();
+      }
     });
+
     contentInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void submit();
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        void submit();
+      }
     });
+
     setTimeout(() => labelInput.focus(), 0);
   }
 
@@ -443,9 +516,84 @@ export default class SecretVaultPlugin extends Plugin {
       .replaceAll("'", "&#39;");
   }
 
-  private requestUnlock(groupId: string, groupName: string, initialized: boolean): Promise<boolean> {
+  private ensureProtyleId(protyle: Protyle): string {
+    let id = this.protyleIds.get(protyle);
+    if (!id) {
+      id = `protyle_${crypto.randomUUID()}`;
+      this.protyleIds.set(protyle, id);
+    }
+    return id;
+  }
+
+  private resolveProtyleLeaseForWindow(source: Window): string | null {
+    const cached = this.sourceProtyleIds.get(source);
+    if (cached) return cached;
+
+    let sourceFrame: HTMLIFrameElement | null = null;
+
+    for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe")) {
+      if (frame.contentWindow === source) {
+        sourceFrame = frame;
+        break;
+      }
+    }
+
+    if (!sourceFrame) return null;
+
+    for (const protyle of getAllEditor()) {
+      if (protyle.wysiwyg?.element?.contains(sourceFrame)) {
+        const protyleId = this.ensureProtyleId(protyle);
+        this.sourceProtyleIds.set(source, protyleId);
+        return protyleId;
+      }
+    }
+
+    return null;
+  }
+
+  private requestUnlock(
+    groupId: string,
+    groupName: string,
+    initialized: boolean,
+    protyleLeaseId?: string,
+  ): Promise<boolean> {
+    if (this.controller.isGroupUnlocked(groupId)) {
+      if (protyleLeaseId) {
+        this.controller.registerProtyleUse(groupId, protyleLeaseId);
+      }
+      return Promise.resolve(true);
+    }
+
+    let flight = this.unlockRequests.get(groupId);
+
+    if (!flight) {
+      flight = this.openUnlockDialog(
+        groupId,
+        groupName,
+        initialized,
+        protyleLeaseId,
+      ).finally(() => this.unlockRequests.delete(groupId));
+
+      this.unlockRequests.set(groupId, flight);
+    }
+
+    return flight.then((unlocked) => {
+      if (unlocked && protyleLeaseId) {
+        this.controller.markGroupProtyleScoped(groupId, protyleLeaseId);
+      }
+      return unlocked;
+    });
+  }
+
+  private openUnlockDialog(
+    groupId: string,
+    groupName: string,
+    initialized: boolean,
+    protyleLeaseId?: string,
+  ): Promise<boolean> {
     return new Promise((resolve) => {
       let settled = false;
+
       const finish = (value: boolean) => {
         if (settled) return;
         settled = true;
@@ -458,10 +606,17 @@ export default class SecretVaultPlugin extends Plugin {
         content: `
           <div class="b3-dialog__content">
             <label class="fn__flex-column" style="gap:8px">
-              <span>${initialized ? "输入该分组口令" : "该分组尚未设置口令；本次输入将成为其口令"}</span>
+              <span>
+                ${initialized
+                  ? "输入该分组口令"
+                  : "该分组尚未设置口令；本次输入将成为其口令"}
+              </span>
               <input class="b3-text-field fn__block" type="password" autocomplete="current-password" data-secret-password />
             </label>
-            <div data-secret-error style="margin-top:8px;color:var(--b3-card-error-color);min-height:20px"></div>
+            <div
+              data-secret-error
+              style="margin-top:8px;color:var(--b3-card-error-color);min-height:20px"
+            ></div>
           </div>
           <div class="b3-dialog__action">
             <button class="b3-button b3-button--cancel" data-secret-cancel>取消</button>
@@ -481,26 +636,38 @@ export default class SecretVaultPlugin extends Plugin {
           error.textContent = "口令不能为空";
           return;
         }
+
         ok.disabled = true;
         error.textContent = "";
+
         try {
-          await this.controller.unlockGroup(groupId, password);
+          await this.controller.unlockGroup(
+            groupId,
+            password,
+            protyleLeaseId,
+          );
+
           input.value = "";
           finish(true);
           dialog.destroy();
         } catch (unlockError) {
           input.value = "";
           input.focus();
-          error.textContent = unlockError instanceof Error ? unlockError.message : String(unlockError);
+          error.textContent = unlockError instanceof Error
+            ? unlockError.message
+            : String(unlockError);
         } finally {
           ok.disabled = false;
         }
       };
+
       ok.addEventListener("click", submit);
       cancel.addEventListener("click", () => dialog.destroy());
+
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") void submit();
       });
+
       setTimeout(() => input.focus(), 0);
     });
   }

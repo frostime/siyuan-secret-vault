@@ -1,4 +1,5 @@
 import { showMessage } from "siyuan";
+import type { VaultInvalidation } from "./types";
 import type { VaultController } from "./vault";
 import { isEmbedRequest, PROTOCOL_NS, PROTOCOL_VERSION, type EmbedResponse } from "./protocol";
 
@@ -8,8 +9,13 @@ export class EmbedBroker {
 
   constructor(
     private readonly vault: VaultController,
-    private readonly requestUnlock: (groupId: string, groupName: string, initialized: boolean) => Promise<boolean>,
-    private readonly openVault: (secretId: string) => void,
+    private readonly requestUnlock: (
+      groupId: string,
+      groupName: string,
+      initialized: boolean,
+      protyleLeaseId?: string,
+    ) => Promise<boolean>,
+    private readonly resolveProtyleLease: (source: Window) => string | null,
   ) {}
 
   start(): void {
@@ -22,12 +28,14 @@ export class EmbedBroker {
     this.channel.close();
   }
 
-  invalidateAll(): void {
+  invalidate(invalidation: VaultInvalidation): void {
+    if (invalidation.scope === "none") return;
     const message: EmbedResponse = {
       ns: PROTOCOL_NS,
       v: PROTOCOL_VERSION,
       type: "invalidate",
       ok: true,
+      data: invalidation,
     };
     this.channel.postMessage(message);
   }
@@ -37,6 +45,7 @@ export class EmbedBroker {
     const source = event.source as Window | null;
     if (!source || typeof source.postMessage !== "function") return;
     const request = event.data;
+    const protyleLeaseId = this.resolveProtyleLease(source) ?? undefined;
     const respond = (response: Omit<EmbedResponse, "ns" | "v" | "requestId" | "type">) => {
       source.postMessage({
         ns: PROTOCOL_NS,
@@ -60,6 +69,8 @@ export class EmbedBroker {
       }
 
       if (request.type === "secret:get-state") {
+        if (protyleLeaseId) this.vault.registerProtyleUse(group.id, protyleLeaseId);
+        const locked = !this.vault.isGroupUnlocked(group.id);
         respond({
           ok: true,
           data: {
@@ -67,15 +78,10 @@ export class EmbedBroker {
             label: secret.label,
             groupId: group.id,
             groupName: group.name,
-            locked: !this.vault.isGroupUnlocked(group.id),
+            locked,
+            content: locked ? undefined : await this.vault.readSecret(secret.id),
           },
         });
-        return;
-      }
-
-      if (request.type === "secret:open-vault") {
-        this.openVault(secret.id);
-        respond({ ok: true });
         return;
       }
 
@@ -86,11 +92,18 @@ export class EmbedBroker {
       }
 
       if (!this.vault.isGroupUnlocked(group.id)) {
-        const unlocked = await this.requestUnlock(group.id, group.name, Boolean(group.verifier));
+        const unlocked = await this.requestUnlock(
+          group.id,
+          group.name,
+          Boolean(group.verifier),
+          protyleLeaseId,
+        );
         if (!unlocked) {
           respond({ ok: false, error: "已取消解锁" });
           return;
         }
+      } else if (protyleLeaseId) {
+        this.vault.registerProtyleUse(group.id, protyleLeaseId);
       }
 
       if (request.type === "secret:reveal") {
@@ -101,6 +114,18 @@ export class EmbedBroker {
       if (request.type === "secret:copy") {
         await navigator.clipboard.writeText(await this.vault.readSecret(secret.id));
         showMessage(`已复制：${secret.label}`);
+        respond({ ok: true });
+        return;
+      }
+
+      if (request.type === "secret:update") {
+        const label = request.data?.label;
+        const content = request.data?.content;
+        if (typeof label !== "string" || typeof content !== "string") {
+          respond({ ok: false, error: "更新参数无效" });
+          return;
+        }
+        await this.vault.updateSecret(secret.id, label, content);
         respond({ ok: true });
         return;
       }

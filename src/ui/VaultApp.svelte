@@ -128,7 +128,7 @@
       <header class="vault-header">
         <div>
           <h2>{selectedGroup.name}</h2>
-          <div class="vault-muted">{selectedGroup.unlocked ? "当前解锁密钥仅保存在内存" : "content 保持加密，label 为明文元数据"}</div>
+          <div class="vault-muted">{selectedGroup.unlocked ? "当前解锁密钥仅保存在内存；15 分钟无访问自动锁定" : "content 保持加密，label 为明文元数据"}</div>
         </div>
         <div class="vault-actions">
           {#if selectedGroup.unlocked}

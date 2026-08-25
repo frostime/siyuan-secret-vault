@@ -63,6 +63,11 @@ export async function deleteBlock(id: string): Promise<void> {
   await kernelPost("/api/block/deleteBlock", { id });
 }
 
+export async function getBlockKramdown(id: string): Promise<string> {
+  const data = await kernelPost<{ kramdown?: string }>("/api/block/getBlockKramdown", { id });
+  return data?.kramdown ?? "";
+}
+
 export async function querySecretReferenceCounts(): Promise<Record<string, number>> {
   type Row = { secret_id: string; count: number | string };
   const rows = await kernelPost<Row[]>("/api/query/sql", {

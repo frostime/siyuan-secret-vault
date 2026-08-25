@@ -59,3 +59,9 @@ export interface VaultSnapshot {
   secrets: PublicSecretState[];
   focusedSecretId: SecretId | null;
 }
+
+export type VaultInvalidation =
+  | { scope: "none" }
+  | { scope: "all" }
+  | { scope: "group"; groupId: GroupId }
+  | { scope: "secret"; secretId: SecretId };

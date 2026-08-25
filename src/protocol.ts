@@ -6,7 +6,7 @@ export type EmbedRequestType =
   | "secret:reveal"
   | "secret:copy"
   | "secret:lock-group"
-  | "secret:open-vault";
+  | "secret:update";
 
 export interface EmbedRequest {
   ns: typeof PROTOCOL_NS;
@@ -14,6 +14,10 @@ export interface EmbedRequest {
   requestId: string;
   type: EmbedRequestType;
   secretId: string;
+  data?: {
+    label?: string;
+    content?: string;
+  };
 }
 
 export interface EmbedResponse {
@@ -26,6 +30,14 @@ export interface EmbedResponse {
   error?: string;
 }
 
+const REQUEST_TYPES = new Set<EmbedRequestType>([
+  "secret:get-state",
+  "secret:reveal",
+  "secret:copy",
+  "secret:lock-group",
+  "secret:update",
+]);
+
 export function isEmbedRequest(value: unknown): value is EmbedRequest {
   if (!value || typeof value !== "object") return false;
   const msg = value as Partial<EmbedRequest>;
@@ -33,5 +45,6 @@ export function isEmbedRequest(value: unknown): value is EmbedRequest {
     && msg.v === PROTOCOL_VERSION
     && typeof msg.requestId === "string"
     && typeof msg.secretId === "string"
-    && typeof msg.type === "string";
+    && typeof msg.type === "string"
+    && REQUEST_TYPES.has(msg.type as EmbedRequestType);
 }

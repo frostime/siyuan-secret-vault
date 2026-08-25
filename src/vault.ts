@@ -13,11 +13,13 @@ import type {
   SecretId,
   SecretRecord,
   VaultData,
+  VaultInvalidation,
   VaultSnapshot,
 } from "./types";
 
 const STORAGE_FILE = "vault.json";
 const DEFAULT_GROUP_ID = "default";
+const AUTO_LOCK_IDLE_MS = 15 * 60 * 1000;
 
 function makeDefaultGroup(): SecretGroup {
   const now = Date.now();
@@ -46,9 +48,13 @@ function id(prefix: string): string {
 export class VaultController {
   private data: VaultData = emptyVault();
   private unlockedKeys = new Map<GroupId, CryptoKey>();
+  private autoLockTimers = new Map<GroupId, ReturnType<typeof setTimeout>>();
+  private protyleScopedGroups = new Set<GroupId>();
+  private groupLeases = new Map<GroupId, Set<string>>();
+  private protyleGroups = new Map<string, Set<GroupId>>();
   private revision = 0;
   private focusedSecretId: SecretId | null = null;
-  private listeners = new Set<(snapshot: VaultSnapshot) => void>();
+  private listeners = new Set<(snapshot: VaultSnapshot, invalidation: VaultInvalidation) => void>();
   private persistChain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -68,23 +74,30 @@ export class VaultController {
       this.data = emptyVault();
       await this.persist();
     }
-    this.bump();
+    this.bump({ scope: "all" });
   }
 
   async reloadFromStorage(): Promise<void> {
-    this.lockAll();
+    this.clearAllRuntimeState();
     const loaded = await this.plugin.loadData(STORAGE_FILE).catch(() => null) as VaultData | null;
-    if (loaded?.schemaVersion === 1) this.data = loaded;
-    this.bump();
+    if (loaded?.schemaVersion === 1 && Array.isArray(loaded.groups) && Array.isArray(loaded.secrets)) {
+      this.data = loaded;
+    }
+    this.bump({ scope: "all" });
   }
 
-  subscribe(listener: (snapshot: VaultSnapshot) => void): () => void {
+  subscribe(listener: (snapshot: VaultSnapshot, invalidation: VaultInvalidation) => void): () => void {
     this.listeners.add(listener);
-    listener(this.getSnapshot());
+    listener(this.getSnapshot(), { scope: "none" });
     return () => this.listeners.delete(listener);
   }
 
   getSnapshot(): VaultSnapshot {
+    const counts = new Map<GroupId, number>();
+    for (const secret of this.data.secrets) {
+      counts.set(secret.groupId, (counts.get(secret.groupId) ?? 0) + 1);
+    }
+
     return {
       revision: this.revision,
       focusedSecretId: this.focusedSecretId,
@@ -94,7 +107,7 @@ export class VaultController {
           name: group.name,
           initialized: Boolean(group.verifier),
           unlocked: this.unlockedKeys.has(group.id),
-          secretCount: this.data.secrets.filter((secret) => secret.groupId === group.id).length,
+          secretCount: counts.get(group.id) ?? 0,
         }))
         .sort((a, b) => a.id === DEFAULT_GROUP_ID ? -1 : b.id === DEFAULT_GROUP_ID ? 1 : a.name.localeCompare(b.name)),
       secrets: this.data.secrets
@@ -141,35 +154,83 @@ export class VaultController {
     group.verifier = await createVerifier(key, group.id);
     this.data.groups.push(group);
     this.unlockedKeys.set(group.id, key);
-    await this.persistAndBump();
+    this.touchGroup(group.id);
+    await this.persistAndBump({ scope: "none" });
     return group.id;
   }
 
-  async unlockGroup(groupId: GroupId, password: string): Promise<void> {
+  async unlockGroup(groupId: GroupId, password: string, protyleLeaseId?: string): Promise<void> {
     const group = this.requireGroup(groupId);
     const key = await deriveGroupKey(password, group.kdf);
     if (!group.verifier) {
       group.verifier = await createVerifier(key, group.id);
       group.updatedAt = Date.now();
       this.unlockedKeys.set(group.id, key);
-      await this.persistAndBump();
+      if (protyleLeaseId) {
+        this.protyleScopedGroups.add(group.id);
+        this.addProtyleLease(group.id, protyleLeaseId);
+      }
+      this.touchGroup(group.id);
+      await this.persistAndBump({ scope: "group", groupId });
       return;
     }
     if (!(await verifyGroupKey(key, group.id, group.verifier))) {
       throw new Error("口令错误");
     }
     this.unlockedKeys.set(group.id, key);
-    this.bump();
+    if (protyleLeaseId) {
+      this.protyleScopedGroups.add(group.id);
+      this.addProtyleLease(group.id, protyleLeaseId);
+    }
+    this.touchGroup(group.id);
+    this.bump({ scope: "group", groupId });
   }
 
   lockGroup(groupId: GroupId): void {
-    this.unlockedKeys.delete(groupId);
-    this.bump();
+    const hadRuntime = this.unlockedKeys.has(groupId)
+      || this.protyleScopedGroups.has(groupId)
+      || this.groupLeases.has(groupId);
+    this.clearGroupRuntimeState(groupId);
+    if (hadRuntime) this.bump({ scope: "group", groupId });
   }
 
   lockAll(): void {
-    this.unlockedKeys.clear();
-    this.bump();
+    const hadRuntime = this.unlockedKeys.size > 0 || this.groupLeases.size > 0;
+    this.clearAllRuntimeState();
+    if (hadRuntime) this.bump({ scope: "all" });
+  }
+
+  /**
+   * Marks a group as having been unlocked from a document Protyle and gives that
+   * Protyle a lease. The last such Protyle closing locks the group immediately.
+   */
+  markGroupProtyleScoped(groupId: GroupId, protyleId: string): void {
+    if (!this.unlockedKeys.has(groupId)) return;
+    this.protyleScopedGroups.add(groupId);
+    this.addProtyleLease(groupId, protyleId);
+    this.touchGroup(groupId);
+  }
+
+  /** Adds a lease only when the group was originally unlocked from a Protyle. */
+  registerProtyleUse(groupId: GroupId, protyleId: string): void {
+    if (!this.unlockedKeys.has(groupId) || !this.protyleScopedGroups.has(groupId)) return;
+    this.addProtyleLease(groupId, protyleId);
+    this.touchGroup(groupId);
+  }
+
+  releaseProtyle(protyleId: string): void {
+    const groups = [...(this.protyleGroups.get(protyleId) ?? [])];
+    this.protyleGroups.delete(protyleId);
+
+    for (const groupId of groups) {
+      const leases = this.groupLeases.get(groupId);
+      leases?.delete(protyleId);
+      if (leases && leases.size === 0) this.groupLeases.delete(groupId);
+
+      if (this.protyleScopedGroups.has(groupId) && !this.groupLeases.has(groupId)) {
+        this.lockGroup(groupId);
+      }
+    }
   }
 
   async changeGroupPassword(groupId: GroupId, newPassword: string): Promise<void> {
@@ -198,7 +259,8 @@ export class VaultController {
       secret.updatedAt = Date.now();
     }
     this.unlockedKeys.set(groupId, newKey);
-    await this.persistAndBump();
+    this.touchGroup(groupId);
+    await this.persistAndBump({ scope: "group", groupId });
   }
 
   async deleteGroup(groupId: GroupId): Promise<void> {
@@ -207,8 +269,8 @@ export class VaultController {
       throw new Error("分组仍包含秘密，请先删除或迁移这些秘密");
     }
     this.data.groups = this.data.groups.filter((group) => group.id !== groupId);
-    this.unlockedKeys.delete(groupId);
-    await this.persistAndBump();
+    this.clearGroupRuntimeState(groupId);
+    await this.persistAndBump({ scope: "none" });
   }
 
   async createSecret(groupId: GroupId, label: string, content: string): Promise<SecretId> {
@@ -227,14 +289,17 @@ export class VaultController {
       updatedAt: now,
     };
     this.data.secrets.push(record);
-    await this.persistAndBump();
+    this.touchGroup(groupId);
+    await this.persistAndBump({ scope: "none" });
     return secretId;
   }
 
   async readSecret(secretId: SecretId): Promise<string> {
     const secret = this.requireSecret(secretId);
     const key = this.requireKey(secret.groupId);
-    return decryptSecretContent(key, secret.groupId, secret.id, secret.encryptedContent);
+    const content = await decryptSecretContent(key, secret.groupId, secret.id, secret.encryptedContent);
+    this.touchGroup(secret.groupId);
+    return content;
   }
 
   async updateSecret(secretId: SecretId, label: string, content: string): Promise<void> {
@@ -245,14 +310,15 @@ export class VaultController {
     secret.label = label;
     secret.encryptedContent = await encryptSecretContent(key, secret.groupId, secret.id, content);
     secret.updatedAt = Date.now();
-    await this.persistAndBump();
+    this.touchGroup(secret.groupId);
+    await this.persistAndBump({ scope: "secret", secretId });
   }
 
   async deleteSecret(secretId: SecretId): Promise<void> {
     this.requireSecret(secretId);
     this.data.secrets = this.data.secrets.filter((secret) => secret.id !== secretId);
     if (this.focusedSecretId === secretId) this.focusedSecretId = null;
-    await this.persistAndBump();
+    await this.persistAndBump({ scope: "secret", secretId });
   }
 
   async insertSecret(secretId: SecretId): Promise<void> {
@@ -262,7 +328,7 @@ export class VaultController {
 
   focusSecret(secretId: SecretId | null): void {
     this.focusedSecretId = secretId;
-    this.bump();
+    this.bump({ scope: "none" });
   }
 
   private requireGroup(groupId: GroupId): SecretGroup {
@@ -283,9 +349,63 @@ export class VaultController {
     return key;
   }
 
-  private async persistAndBump(): Promise<void> {
+  private touchGroup(groupId: GroupId): void {
+    if (!this.unlockedKeys.has(groupId)) return;
+    const previous = this.autoLockTimers.get(groupId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.autoLockTimers.delete(groupId);
+      if (this.unlockedKeys.has(groupId)) this.lockGroup(groupId);
+    }, AUTO_LOCK_IDLE_MS);
+    this.autoLockTimers.set(groupId, timer);
+  }
+
+  private addProtyleLease(groupId: GroupId, protyleId: string): void {
+    let leases = this.groupLeases.get(groupId);
+    if (!leases) {
+      leases = new Set<string>();
+      this.groupLeases.set(groupId, leases);
+    }
+    leases.add(protyleId);
+
+    let groups = this.protyleGroups.get(protyleId);
+    if (!groups) {
+      groups = new Set<GroupId>();
+      this.protyleGroups.set(protyleId, groups);
+    }
+    groups.add(groupId);
+  }
+
+  private clearGroupRuntimeState(groupId: GroupId): void {
+    const timer = this.autoLockTimers.get(groupId);
+    if (timer) clearTimeout(timer);
+    this.autoLockTimers.delete(groupId);
+    this.unlockedKeys.delete(groupId);
+    this.protyleScopedGroups.delete(groupId);
+
+    const leases = this.groupLeases.get(groupId);
+    if (leases) {
+      for (const protyleId of leases) {
+        const groups = this.protyleGroups.get(protyleId);
+        groups?.delete(groupId);
+        if (groups?.size === 0) this.protyleGroups.delete(protyleId);
+      }
+    }
+    this.groupLeases.delete(groupId);
+  }
+
+  private clearAllRuntimeState(): void {
+    for (const timer of this.autoLockTimers.values()) clearTimeout(timer);
+    this.autoLockTimers.clear();
+    this.unlockedKeys.clear();
+    this.protyleScopedGroups.clear();
+    this.groupLeases.clear();
+    this.protyleGroups.clear();
+  }
+
+  private async persistAndBump(invalidation: VaultInvalidation): Promise<void> {
     await this.persist();
-    this.bump();
+    this.bump(invalidation);
   }
 
   private async persist(): Promise<void> {
@@ -294,9 +414,9 @@ export class VaultController {
     await this.persistChain;
   }
 
-  private bump(): void {
+  private bump(invalidation: VaultInvalidation): void {
     this.revision += 1;
     const snapshot = this.getSnapshot();
-    for (const listener of this.listeners) listener(snapshot);
+    for (const listener of this.listeners) listener(snapshot, invalidation);
   }
 }

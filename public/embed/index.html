@@ -11,19 +11,36 @@
     <div class="header">
       <div class="identity">
         <strong id="label">Secret</strong>
-        <span id="group"></span>
+        <span id="meta">连接中…</span>
       </div>
-      <span id="status" class="status">连接中…</span>
+      <span id="status" class="status">•••</span>
     </div>
+
     <pre id="content" class="content" hidden></pre>
+
+    <div id="locked" class="locked" hidden>
+      <span>内容已锁定</span>
+      <button id="unlock" type="button">解锁</button>
+    </div>
+
+    <div id="editor" class="editor" hidden>
+      <input id="edit-label" class="edit-label" type="text" autocomplete="off" placeholder="Label" />
+      <textarea id="edit-content" class="edit-content" rows="5" spellcheck="false"></textarea>
+      <div class="editor-actions">
+        <button id="save" type="button">保存</button>
+        <button id="cancel" type="button">取消</button>
+      </div>
+    </div>
+
     <div id="error" class="error" hidden></div>
-    <div class="actions">
-      <button id="reveal">显示</button>
-      <button id="copy">复制</button>
-      <button id="lock">锁定分组</button>
-      <button id="open">打开秘密库</button>
+
+    <div id="actions" class="actions">
+      <button id="edit" type="button">编辑</button>
+      <button id="copy" type="button">复制</button>
+      <button id="lock" type="button">锁定分组</button>
     </div>
   </main>
+
   <script type="module" src="./embed.js"></script>
 </body>
 </html>
