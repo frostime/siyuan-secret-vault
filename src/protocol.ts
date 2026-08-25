@@ -30,6 +30,14 @@ export interface EmbedResponse {
   error?: string;
 }
 
+export interface EmbedResizeMessage {
+  ns: typeof PROTOCOL_NS;
+  v: typeof PROTOCOL_VERSION;
+  type: "embed:resize";
+  secretId: string;
+  height: number;
+}
+
 const REQUEST_TYPES = new Set<EmbedRequestType>([
   "secret:get-state",
   "secret:reveal",
@@ -47,4 +55,17 @@ export function isEmbedRequest(value: unknown): value is EmbedRequest {
     && typeof msg.secretId === "string"
     && typeof msg.type === "string"
     && REQUEST_TYPES.has(msg.type as EmbedRequestType);
+}
+
+export function isEmbedResizeMessage(value: unknown): value is EmbedResizeMessage {
+  if (!value || typeof value !== "object") return false;
+
+  const msg = value as Partial<EmbedResizeMessage>;
+
+  return msg.ns === PROTOCOL_NS
+    && msg.v === PROTOCOL_VERSION
+    && msg.type === "embed:resize"
+    && typeof msg.secretId === "string"
+    && typeof msg.height === "number"
+    && Number.isFinite(msg.height);
 }

@@ -38,6 +38,7 @@ export default class SecretVaultPlugin extends Plugin {
   private brokerUnsubscribe: (() => void) | null = null;
   private readonly protyleIds = new WeakMap<Protyle, string>();
   private readonly sourceProtyleIds = new WeakMap<Window, string>();
+  private readonly sourceFrames = new WeakMap<Window, HTMLIFrameElement>();
   private readonly unlockRequests = new Map<string, Promise<boolean>>();
 
   async onload(): Promise<void> {
@@ -117,6 +118,7 @@ export default class SecretVaultPlugin extends Plugin {
       (groupId, groupName, initialized, protyleLeaseId) =>
         this.requestUnlock(groupId, groupName, initialized, protyleLeaseId),
       (source) => this.resolveProtyleLeaseForWindow(source),
+      (source, height) => this.resizeEmbedForWindow(source, height),
     );
     this.broker.start();
     this.brokerUnsubscribe = this.controller.subscribe(
@@ -525,19 +527,32 @@ export default class SecretVaultPlugin extends Plugin {
     return id;
   }
 
+  private findFrameForWindow(source: Window): HTMLIFrameElement | null {
+    const cached = this.sourceFrames.get(source);
+
+    if (cached?.isConnected && cached.contentWindow === source) {
+      return cached;
+    }
+
+    if (cached) {
+      this.sourceFrames.delete(source);
+    }
+
+    for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe")) {
+      if (frame.contentWindow === source) {
+        this.sourceFrames.set(source, frame);
+        return frame;
+      }
+    }
+
+    return null;
+  }
+
   private resolveProtyleLeaseForWindow(source: Window): string | null {
     const cached = this.sourceProtyleIds.get(source);
     if (cached) return cached;
 
-    let sourceFrame: HTMLIFrameElement | null = null;
-
-    for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe")) {
-      if (frame.contentWindow === source) {
-        sourceFrame = frame;
-        break;
-      }
-    }
-
+    const sourceFrame = this.findFrameForWindow(source);
     if (!sourceFrame) return null;
 
     for (const protyle of getAllEditor()) {
@@ -549,6 +564,37 @@ export default class SecretVaultPlugin extends Plugin {
     }
 
     return null;
+  }
+
+  private resizeEmbedForWindow(source: Window, requestedHeight: number): void {
+    const frame = this.findFrameForWindow(source);
+    if (!frame) return;
+
+    const block = frame.closest<HTMLElement>('[data-type="NodeIFrame"]');
+    if (!block) return;
+
+    // Defensive bounds: an embed must not be able to create an
+    // effectively unbounded Protyle block.
+    const height = Math.round(
+      Math.max(42, Math.min(420, requestedHeight)),
+    );
+    const cssHeight = `${height}px`;
+
+    // NodeIFrame controls the vertical space occupied in Protyle.
+    // The inner iframe must follow the same height so its viewport
+    // matches the outer editor block.
+    //
+    // Compare inline styles directly instead of getBoundingClientRect():
+    // this avoids an unnecessary forced layout in the parent document.
+    if (
+      block.style.height === cssHeight
+      && frame.style.height === cssHeight
+    ) {
+      return;
+    }
+
+    block.style.height = cssHeight;
+    frame.style.height = cssHeight;
   }
 
   private requestUnlock(

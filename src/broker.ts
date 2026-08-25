@@ -1,7 +1,13 @@
 import { showMessage } from "siyuan";
 import type { VaultInvalidation } from "./types";
 import type { VaultController } from "./vault";
-import { isEmbedRequest, PROTOCOL_NS, PROTOCOL_VERSION, type EmbedResponse } from "./protocol";
+import {
+  isEmbedRequest,
+  isEmbedResizeMessage,
+  PROTOCOL_NS,
+  PROTOCOL_VERSION,
+  type EmbedResponse,
+} from "./protocol";
 
 export class EmbedBroker {
   private readonly channel = new BroadcastChannel("siyuan-secret-vault:events");
@@ -16,6 +22,7 @@ export class EmbedBroker {
       protyleLeaseId?: string,
     ) => Promise<boolean>,
     private readonly resolveProtyleLease: (source: Window) => string | null,
+    private readonly resizeEmbed: (source: Window, height: number) => void,
   ) {}
 
   start(): void {
@@ -41,9 +48,18 @@ export class EmbedBroker {
   }
 
   private readonly onMessage = async (event: MessageEvent): Promise<void> => {
-    if (this.disposed || event.origin !== window.location.origin || !isEmbedRequest(event.data)) return;
+    if (this.disposed || event.origin !== window.location.origin) return;
+
     const source = event.source as Window | null;
     if (!source || typeof source.postMessage !== "function") return;
+
+    if (isEmbedResizeMessage(event.data)) {
+      this.resizeEmbed(source, event.data.height);
+      return;
+    }
+
+    if (!isEmbedRequest(event.data)) return;
+
     const request = event.data;
     const protyleLeaseId = this.resolveProtyleLease(source) ?? undefined;
     const respond = (response: Omit<EmbedResponse, "ns" | "v" | "requestId" | "type">) => {

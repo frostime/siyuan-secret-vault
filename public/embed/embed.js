@@ -4,22 +4,14 @@ const V = 1;
 const FAST_TIMEOUT_MS = 8_000;
 const INTERACTIVE_TIMEOUT_MS = 10 * 60_000;
 
-const FRAME_HEIGHTS = {
-  loading: 54,
-  locked: 58,
-  unlocked: 130,
-  editing: 205,
-  unavailable: 82,
-};
-
 const secretId = new URLSearchParams(location.search).get("secret") || "";
 const pending = new Map();
 const channel = new BroadcastChannel("siyuan-secret-vault:events");
 
 let currentState = null;
 let editing = false;
-let currentMode = "loading";
 let refreshPromise = null;
+let resizeScheduled = false;
 
 const el = {
   app: document.getElementById("app"),
@@ -93,34 +85,45 @@ function request(type, data) {
   });
 }
 
-function setFrameHeight(mode = currentMode) {
-  currentMode = mode;
+function requestFrameResize() {
+  if (resizeScheduled) return;
 
-  const frame = window.frameElement;
-  if (!(frame instanceof HTMLIFrameElement)) return;
+  resizeScheduled = true;
 
-  let height = FRAME_HEIGHTS[mode] ?? FRAME_HEIGHTS.unlocked;
+  requestAnimationFrame(() => {
+    resizeScheduled = false;
 
-  if (!el.error.hidden) {
-    height += 31;
-  }
+    const bodyStyle = getComputedStyle(document.body);
+    const paddingTop = Number.parseFloat(bodyStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(bodyStyle.paddingBottom) || 0;
 
-  // Do not derive height from scrollHeight/current iframe height.
-  // That creates a positive feedback loop when the iframe viewport
-  // itself participates in layout.
-  frame.style.height = `${height}px`;
+    // Measure the actual card, not document.scrollHeight. scrollHeight is
+    // viewport-dependent inside an iframe and therefore cannot reliably shrink.
+    const height = Math.ceil(
+      el.app.getBoundingClientRect().height
+      + paddingTop
+      + paddingBottom
+      + 2,
+    );
+
+    parent.postMessage({
+      ns: NS,
+      v: V,
+      type: "embed:resize",
+      secretId,
+      height,
+    }, location.origin);
+  });
 }
 
 function setError(message = "", retryable = false) {
   el.error.hidden = !message;
   el.errorText.textContent = message;
   el.retry.hidden = !message || !retryable;
-  setFrameHeight();
 }
 
 function setUnavailable(message) {
   editing = false;
-  currentMode = "unavailable";
 
   el.app.classList.remove("state-loading");
   el.app.classList.add("state-unavailable");
@@ -134,7 +137,6 @@ function setUnavailable(message) {
   el.actions.hidden = true;
 
   setError(message, true);
-  setFrameHeight("unavailable");
 }
 
 function renderState(state) {
@@ -150,7 +152,6 @@ function renderState(state) {
   el.status.textContent = state.locked ? "🔒" : "🔓";
 
   if (editing) {
-    setFrameHeight("editing");
     return;
   }
 
@@ -163,7 +164,6 @@ function renderState(state) {
     el.content.textContent = "";
 
     setError();
-    setFrameHeight("locked");
     return;
   }
 
@@ -173,7 +173,6 @@ function renderState(state) {
   el.content.textContent = state.content ?? "";
 
   setError();
-  setFrameHeight("unlocked");
 }
 
 function enterEdit() {
@@ -190,7 +189,7 @@ function enterEdit() {
   el.editor.hidden = false;
 
   setError();
-  setFrameHeight("editing");
+  requestFrameResize();
 
   setTimeout(() => {
     el.editContent.focus();
@@ -204,6 +203,7 @@ function enterEdit() {
 function exitEdit() {
   editing = false;
   renderState(currentState);
+  requestFrameResize();
 }
 
 async function performRefresh() {
@@ -254,8 +254,9 @@ function shouldInvalidate(invalidation) {
 function handleInvalidate(message) {
   if (!shouldInvalidate(message.data)) return;
 
-  // Another reference may have modified this secret. Discard a stale
-  // inline editor instead of letting it silently overwrite newer data.
+  // Background state changes deliberately do NOT resize the outer iframe.
+  // Resize is interaction-driven only, to avoid a burst of editor layouts
+  // when many embeds are loaded or invalidated at the same time.
   editing = false;
   el.editor.hidden = true;
 
@@ -329,10 +330,10 @@ el.retry.addEventListener("click", () => {
   el.status.textContent = "•••";
 
   setError();
-  setFrameHeight("loading");
 
   void refresh().finally(() => {
     el.retry.disabled = false;
+    requestFrameResize();
   });
 });
 
@@ -349,8 +350,10 @@ el.unlock.addEventListener("click", async () => {
     }
 
     await refresh();
+    requestFrameResize();
   } catch (error) {
     setError(error?.message || String(error));
+    requestFrameResize();
   } finally {
     el.unlock.disabled = false;
   }
@@ -367,8 +370,15 @@ el.copy.addEventListener("click", async () => {
     if (!response.ok) {
       throw new Error(response.error || "复制失败");
     }
+
+    // Copy may have caused a locked group to be unlocked through the
+    // parent password dialog. Refresh and resize because this operation
+    // was explicitly initiated by the user.
+    await refresh();
+    requestFrameResize();
   } catch (error) {
     setError(error?.message || String(error));
+    requestFrameResize();
   } finally {
     el.copy.disabled = false;
   }
@@ -409,8 +419,10 @@ el.save.addEventListener("click", async () => {
     el.editor.hidden = true;
 
     await refresh();
+    requestFrameResize();
   } catch (error) {
     setError(error?.message || String(error));
+    requestFrameResize();
   } finally {
     el.save.disabled = false;
   }
@@ -440,8 +452,10 @@ el.lock.addEventListener("click", async () => {
 
     editing = false;
     await refresh();
+    requestFrameResize();
   } catch (error) {
     setError(error?.message || String(error));
+    requestFrameResize();
   } finally {
     el.lock.disabled = false;
   }
@@ -451,6 +465,8 @@ if (!secretId) {
   setUnavailable("URL 中缺少 secret 参数");
   el.retry.hidden = true;
 } else {
-  setFrameHeight("loading");
+  // Deliberately do not resize on initial load.
+  // Large documents may instantiate many Secret embeds at once; keeping
+  // initialization resize-free avoids an N-iframe layout burst in Protyle.
   void refresh();
 }
