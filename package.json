@@ -1,6 +1,6 @@
 {
   "name": "siyuan-secret-vault",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Group-based encrypted secret vault with interactive SiYuan IFrame blocks",
   "license": "MIT",
