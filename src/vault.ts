@@ -97,14 +97,22 @@ export class VaultController {
   async initialize(): Promise<void> {
     await this.mutations.runExclusive(async () => {
       const loaded = await this.readStoredVault();
-      const next = loaded ?? emptyVault();
-      const needsPersist = !loaded || this.ensureDefaultGroup(next);
 
-      if (needsPersist) {
-        await this.persist(next);
+      // Missing storage is a valid first-run state. Keep the default vault only
+      // in memory until the first real user mutation. Eagerly writing an empty
+      // vault here can turn a new device that has not finished official sync
+      // into a competing local writer.
+      if (!loaded) {
+        this.data = emptyVault();
+        this.publish({ scope: "all" });
+        return;
       }
 
-      this.data = next;
+      if (this.ensureDefaultGroup(loaded)) {
+        await this.persist(loaded);
+      }
+
+      this.data = loaded;
       this.publish({ scope: "all" });
     });
   }
@@ -480,8 +488,17 @@ export class VaultController {
   }
 
   private async readStoredVault(): Promise<VaultData | null> {
-    const loaded = await this.plugin.loadData(STORAGE_FILE).catch(() => null);
-    return isVaultData(loaded) ? loaded : null;
+    const loaded = await this.plugin.loadData(STORAGE_FILE);
+    if (loaded == null) return null;
+
+    // A read failure must propagate, and an existing but malformed vault must
+    // never be silently treated as "no data". Otherwise a later mutation could
+    // overwrite recoverable/syncing data with a freshly created empty vault.
+    if (!isVaultData(loaded)) {
+      throw new Error("秘密库数据格式无效；已拒绝覆盖现有 vault.json");
+    }
+
+    return loaded;
   }
 
   private ensureDefaultGroup(data: VaultData): boolean {
