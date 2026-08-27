@@ -71,7 +71,7 @@ New references use `custom-secret-version=2` and persist:
 
 Only `custom-secret-id` is authoritative. Snapshot metadata is intentionally allowed to become stale. Renaming a Secret in the Vault does not scan or rewrite documents.
 
-The iframe `srcdoc` is also a snapshot owned by this module. It contains static HTML/CSS and an explicit `连接` link. It contains no script and performs no parent communication.
+The persistent iframe points to `/plugins/<plugin>/embed/index.html`, a same-origin non-reactive dormant shell. SiYuan 3.8 sanitizes `srcdoc` on document iframe blocks, so `srcdoc` is intentionally not part of the representation. Snapshot metadata remains in block attributes. The shell may read those host attributes once to render its own label/group snapshot, but it performs no parent communication, polling, observation, or automatic refresh.
 
 ### `ProtyleContextRegistry`
 
@@ -88,6 +88,8 @@ It deliberately knows nothing about Secret Vault URL paths or protocol messages.
 Own explicit, user-triggered maintenance transformations exposed by the Vault tab. Migration tasks own discovery, validation, sequential writes, verification, and retry semantics. The Vault UI only renders task state and progress.
 
 The v1 -> v2 task treats `custom-secret-id` as authoritative, cross-checks legacy iframe identity, refuses conflicts instead of guessing, re-validates each block immediately before writing, and reuses `SecretReferenceService` to build the canonical v2 representation. No migration runs during plugin startup.
+
+0.4.2 also includes an explicit repair task for v2 references created by 0.4.0/0.4.1. Those releases used `srcdoc`, which SiYuan 3.8 removes from persisted iframe blocks; the repair rewrites only affected v2 blocks to the canonical dormant-shell URL.
 
 ### `EmbedSessionBroker`
 
@@ -117,14 +119,14 @@ If a session is revoked it immediately deletes plaintext from the DOM, clears ed
 
 ```text
 SiYuan opens document
-    -> NodeIFrame srcdoc renders static snapshot
+    -> NodeIFrame lazily loads non-reactive dormant shell
     -> no plugin request
     -> no Vault read
     -> no timer
     -> no BroadcastChannel
 
 user clicks 连接
-    -> iframe navigates itself to live.html?secret=<id>
+    -> iframe navigates itself to live.html; live.html reads authoritative custom-secret-id from the host block
     -> live page creates MessageChannel
     -> one window.postMessage(session:connect, transferred port)
     -> parent validates block attributes + Protyle context
@@ -138,7 +140,7 @@ The initial live connection is itself user-triggered. Loading the document is no
 
 Existing v1 documents are never migrated automatically.
 
-`public/embed/index.html` is a zero-JavaScript dormant compatibility shell. It does not parse query parameters, contact the parent plugin, connect to the Vault, or offer a live-session path. It only tells the user to open `秘密库 -> 数据与迁移`.
+`public/embed/index.html` is the non-reactive dormant shell for both v2 references and legacy v1 references. `dormant.js` performs one synchronous read of the host block's snapshot attributes so the block can render its own label/group; it has no messages, timers, observers, polling, Vault access, or host-ready behavior. Its only live transition is the ordinary `连接` link to `live.html`.
 
 The Vault tab contains an explicit migration center. Its v1 -> v2 task performs a read-only SQL scan first, shows ready/problem counts, and only rewrites documents after the user confirms `开始迁移`. Blocks are processed serially and retain their existing block IDs.
 

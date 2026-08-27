@@ -347,7 +347,7 @@
 
   async function runMigrationTask() {
     if (!selectedMigration || !migrationPreview || migrationPreview.ready === 0 || migrationBusy) return;
-    if (!confirm(`将串行迁移 ${migrationPreview.ready} 个文档引用。建议先关闭包含旧引用的文档，并确保思源同步已完成。是否继续？`)) return;
+    if (!confirm(`将串行处理 ${migrationPreview.ready} 个文档引用。建议先关闭相关文档，并确保思源同步已完成。是否继续？`)) return;
 
     migrationBusy = true;
     migrationError = "";
@@ -658,24 +658,24 @@
               <p>{selectedMigration.description}</p>
             </div>
             <button class="b3-button b3-button--outline" disabled={migrationBusy} onclick={inspectMigration}>
-              {migrationBusy ? "处理中…" : migrationPreview ? "重新扫描" : "扫描旧版引用"}
+              {migrationBusy ? "处理中…" : migrationPreview ? "重新扫描" : "扫描任务"}
             </button>
           </header>
 
           {#if migrationPreview}
             <section class="vault-migration-summary" aria-label="扫描结果">
               <div><strong>{migrationPreview.total}</strong><span>发现</span></div>
-              <div><strong>{migrationPreview.ready}</strong><span>可迁移</span></div>
+              <div><strong>{migrationPreview.ready}</strong><span>可处理</span></div>
               <div class:warn={migrationPreview.issues > 0}><strong>{migrationPreview.issues}</strong><span>需要处理</span></div>
             </section>
 
             <div class="vault-migration-actions">
-              <span>扫描只读，不会打开文档；迁移前建议关闭包含旧引用的文档。</span>
+              <span>扫描只读，不会打开文档；执行前建议关闭相关文档。</span>
               <button
                 class="b3-button b3-button--text"
                 disabled={migrationBusy || migrationPreview.ready === 0}
                 onclick={runMigrationTask}
-              >开始迁移 {migrationPreview.ready > 0 ? `(${migrationPreview.ready})` : ""}</button>
+              >开始执行 {migrationPreview.ready > 0 ? `(${migrationPreview.ready})` : ""}</button>
             </div>
 
             <section class="vault-migration-items">
@@ -692,7 +692,7 @@
                   <code class="vault-block-id" title="块 ID，可选中复制">{item.blockId}</code>
                 </article>
               {:else}
-                <div class="vault-migration-empty">没有发现需要迁移的旧版引用。</div>
+                <div class="vault-migration-empty">没有发现需要处理的引用。</div>
               {/each}
             </section>
           {:else}

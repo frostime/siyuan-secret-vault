@@ -30,10 +30,11 @@ export interface SlashTarget {
 /**
  * Owns the persistent SiYuan representation of a Secret reference.
  *
- * Version 2 references are dormant document-owned snapshots. Their srcdoc has
- * no script and does not contact the plugin. The only active transition is the
- * user's explicit link navigation to live.html. Secret ID remains authoritative;
- * all other custom attributes are non-authoritative display metadata.
+ * Version 2 references are dormant document-owned snapshots. Their iframe loads
+ * one non-reactive local shell and does not contact the plugin runtime. The
+ * only active transition is the user's explicit link navigation to live.html.
+ * Secret ID remains authoritative; all other custom attributes are
+ * non-authoritative display metadata.
  */
 export class SecretReferenceService {
   constructor(private readonly pluginName: string) {}
@@ -81,11 +82,12 @@ export class SecretReferenceService {
     groupName: string,
     existingStyle = "",
   ): DormantReferenceDefinition {
-    const liveHref = `/plugins/${this.pluginName}/embed/live.html?secret=${encodeURIComponent(secret.id)}`;
-    const srcdoc = buildDormantSrcdoc(secret.label, groupName, liveHref);
+    const dormantSrc = `/plugins/${this.pluginName}/embed/index.html`;
+    const title = `Secret Vault: ${secret.label || "Secret"}`;
     const markdown = [
       '<iframe loading="lazy"',
-      ` srcdoc="${escapeHtmlAttribute(srcdoc)}"`,
+      ` src="${escapeHtmlAttribute(dormantSrc)}"`,
+      ` title="${escapeHtmlAttribute(title)}"`,
       ` style="width: 100%; height: 100%; border: 0; border-radius: 6px;"`,
       "></iframe>",
     ].join("");
@@ -104,6 +106,25 @@ export class SecretReferenceService {
         style: mergeInitialHeight(existingStyle, DEFAULT_EMBED_HEIGHT),
       },
     };
+  }
+
+  /**
+   * Checks the persisted v2 iframe representation after SiYuan/Lute has parsed it.
+   *
+   * SiYuan 3.8 sanitizes `srcdoc` on document iframe blocks, so the canonical
+   * dormant representation deliberately uses a normal same-origin plugin URL.
+   */
+  isDormantReferenceMarkdown(markdown: string): boolean {
+    const src = extractIframeSrc(markdown);
+    if (src === null) return false;
+
+    try {
+      const url = new URL(src, location.origin);
+      return url.pathname === `/plugins/${this.pluginName}/embed/index.html`
+        && !url.searchParams.has("secret");
+    } catch {
+      return false;
+    }
   }
 
   /** Validates the authoritative reference identity during an explicit session handshake. */
@@ -142,6 +163,15 @@ export class SecretReferenceService {
       throw new Error("思源没有把嵌入内容解析为 IFrame 块；已回滚此次插入");
     }
 
+    // Validate what SiYuan actually persisted, not only the HTML we generated.
+    // This specifically guards against sanitizers silently dropping iframe
+    // attributes (the 0.4.0/0.4.1 srcdoc regression).
+    const persistedMarkdown = await getBlockKramdown(inserted.id);
+    if (!this.isDormantReferenceMarkdown(persistedMarkdown)) {
+      await deleteBlock(inserted.id).catch(() => undefined);
+      throw new Error("思源改写了 Secret 静态引用；已回滚此次插入，请升级插件后重试");
+    }
+
     try {
       const attrs = await getBlockAttrs(inserted.id);
       const definition = this.buildDormantReference(secret, groupName, attrs.style ?? "");
@@ -171,12 +201,14 @@ export class SecretReferenceService {
   }
 }
 
-function buildDormantSrcdoc(label: string, groupName: string, liveHref: string): string {
-  const safeLabel = escapeHtmlText(label || "Secret");
-  const safeGroup = escapeHtmlText(groupName || "Secret Vault");
-  const safeHref = escapeHtmlAttribute(liveHref);
+function extractIframeSrc(markdown: string): string | null {
+  const html = markdown.replace(/\n?\{:[\s\S]*$/, "").trim();
+  const iframe = html.match(/<iframe\b[^>]*>/i)?.[0] ?? "";
+  if (!iframe) return null;
 
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:CanvasText;background:transparent}body{padding:8px}.card{min-height:148px;padding:14px 16px;border:1px solid color-mix(in srgb,currentColor 12%,transparent);border-radius:8px;background:color-mix(in srgb,Canvas 98%,currentColor 2%);display:flex;align-items:center;justify-content:space-between;gap:16px}.identity{min-width:0}.label{display:block;font-size:14px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta{display:block;margin-top:4px;font-size:11px;opacity:.58}.connect{flex:0 0 auto;padding:5px 10px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:6px;color:inherit;text-decoration:none;font-size:12px}.connect:hover{background:color-mix(in srgb,currentColor 7%,transparent)}</style></head><body><main class="card"><div class="identity"><strong class="label">🔐 ${safeLabel}</strong><span class="meta">${safeGroup} · 静态引用</span></div><a class="connect" href="${safeHref}">连接</a></main></body></html>`;
+  const match = iframe.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+  if (!match) return null;
+  return match[1] ?? match[2] ?? match[3] ?? "";
 }
 
 function normalizeEditorText(value: string): string {

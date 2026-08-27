@@ -11,6 +11,7 @@ import { ProtyleContextRegistry } from "./editor/protyle-context";
 // import { SecretBlockHeightController } from "./editor/secret-block-height";
 import { SecretDialogs } from "./editor/secret-dialogs";
 import { SecretReferenceService } from "./editor/secret-reference";
+import { DormantReferenceV2RepairMigration } from "./migrations/dormant-reference-v2-repair";
 import { LegacyReferenceV1ToV2Migration } from "./migrations/legacy-reference-v1-to-v2";
 import type { MigrationTask } from "./migrations/types";
 import { VAULT_CONTEXT_ID } from "./types";
@@ -40,6 +41,7 @@ export default class SecretVaultPlugin extends Plugin {
     this.references = new SecretReferenceService(this.name);
     this.dialogs = new SecretDialogs(this.vault, this.references, this.contexts);
     this.migrationTasks = [
+      new DormantReferenceV2RepairMigration(this.vault, this.references),
       new LegacyReferenceV1ToV2Migration(this.name, this.vault, this.references),
     ];
 

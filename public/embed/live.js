@@ -4,7 +4,18 @@ const FAST_TIMEOUT_MS = 8_000;
 const INTERACTIVE_TIMEOUT_MS = 10 * 60_000;
 const HOST_UNAVAILABLE_MESSAGE = "秘密库插件未启用或当前不可用";
 
-const secretId = new URLSearchParams(location.search).get("secret") || "";
+function readHostSecretId() {
+  try {
+    const frame = window.frameElement;
+    const block = frame?.closest?.('[data-type="NodeIFrame"]');
+    return block?.getAttribute?.("custom-secret-id")?.trim?.() || "";
+  } catch {
+    return "";
+  }
+}
+
+const secretId = (new URLSearchParams(location.search).get("secret") || "").trim()
+  || readHostSecretId();
 
 let phase = "connecting";
 let currentState = null;
@@ -227,9 +238,9 @@ function handlePortMessage(event) {
 
 function connect() {
   if (!secretId) {
-    setDisconnected("URL 中缺少 secret 参数");
+    setDisconnected("当前文档块缺少 custom-secret-id");
     el.reconnect.hidden = true;
-    return Promise.reject(new Error("URL 中缺少 secret 参数"));
+    return Promise.reject(new Error("当前文档块缺少 custom-secret-id"));
   }
 
   rejectPending(new Error("会话正在重新连接"));
@@ -414,11 +425,12 @@ window.addEventListener("pagehide", () => {
 }, { once: true });
 
 if (!secretId) {
-  setDisconnected("URL 中缺少 secret 参数");
+  setDisconnected("当前文档块缺少 custom-secret-id");
   el.reconnect.hidden = true;
 } else {
-  // This page is reachable only after an explicit user navigation from a
-  // dormant reference (or by opening the live URL directly). That user action
-  // is the sole trigger for the one-time connection attempt.
+  // This page is reachable only after an explicit user navigation from the
+  // non-reactive dormant shell (or by opening a live URL directly). The
+  // Secret ID is normally read from the host block's authoritative attribute.
+  // That user action is the sole trigger for the one-time connection attempt.
   void connect().catch(() => undefined);
 }

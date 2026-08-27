@@ -24,7 +24,8 @@ interface LegacyReferenceRow {
 }
 
 type ParsedReference =
-  | { kind: "legacy" | "dormant"; secretId: string }
+  | { kind: "legacy"; secretId: string }
+  | { kind: "dormant"; secretId: null }
   | { kind: "unknown"; secretId: null };
 
 /**
@@ -33,7 +34,7 @@ type ParsedReference =
  * Discovery is read-only. Migration is sequential and re-validates every block
  * immediately before writing so a stale preview cannot rewrite a block that the
  * user changed after scanning. Secret ID from block attributes remains the
- * authoritative identity; URL/srcdoc identity is used only as a consistency
+ * authoritative identity; legacy URL identity is used only as a consistency
  * check and is never guessed through conflicts.
  */
 export class LegacyReferenceV1ToV2Migration implements MigrationTask {
@@ -129,7 +130,7 @@ export class LegacyReferenceV1ToV2Migration implements MigrationTask {
     if (parsed.kind === "unknown") {
       return { ...base, label: null, status: "issue", note: "块内容不是可识别的 Secret Vault v1/v2 iframe" };
     }
-    if (parsed.secretId !== secretId) {
+    if (parsed.kind === "legacy" && parsed.secretId !== secretId) {
       return { ...base, label: null, status: "issue", note: "块属性 Secret ID 与 iframe 内容不一致，已拒绝猜测" };
     }
 
@@ -165,7 +166,9 @@ export class LegacyReferenceV1ToV2Migration implements MigrationTask {
     const currentMarkdown = await getBlockKramdown(blockId);
     const parsed = parseReference(currentMarkdown, this.pluginName);
     if (parsed.kind === "unknown") throw new Error("块内容已变化，不再是可识别的 Secret Vault 引用");
-    if (parsed.secretId !== secretId) throw new Error("块属性与 iframe Secret ID 已发生冲突");
+    if (parsed.kind === "legacy" && parsed.secretId !== secretId) {
+      throw new Error("块属性与 iframe Secret ID 已发生冲突");
+    }
 
     const secret = this.vault.getSecret(secretId);
     if (!secret) throw new Error("Vault 中已不存在该 Secret");
@@ -187,8 +190,7 @@ export class LegacyReferenceV1ToV2Migration implements MigrationTask {
       throw new Error("块内容已更新，但 v2 属性验证失败；可重新扫描后重试");
     }
 
-    const verified = parseReference(verifiedMarkdown, this.pluginName);
-    if (verified.kind !== "dormant" || verified.secretId !== secretId) {
+    if (!this.references.isDormantReferenceMarkdown(verifiedMarkdown)) {
       throw new Error("v2 静态引用验证失败；请保留该块并重新扫描");
     }
 
@@ -222,28 +224,17 @@ function parseReference(markdown: string, pluginName: string): ParsedReference {
   if (!iframe) return { kind: "unknown", secretId: null };
 
   const expectedLegacyPath = `/plugins/${pluginName}/embed/index.html`;
-  const expectedLivePath = `/plugins/${pluginName}/embed/live.html`;
   const src = iframe.getAttribute("src");
 
-  if (src) {
-    const url = parseUrl(src);
-    if (url?.pathname === expectedLegacyPath) {
-      const secretId = normalizeId(url.searchParams.get("secret"));
-      return secretId ? { kind: "legacy", secretId } : { kind: "unknown", secretId: null };
-    }
-  }
+  if (!src) return { kind: "unknown", secretId: null };
 
-  const srcdoc = iframe.getAttribute("srcdoc");
-  if (!srcdoc) return { kind: "unknown", secretId: null };
+  const url = parseUrl(src);
+  if (url?.pathname !== expectedLegacyPath) return { kind: "unknown", secretId: null };
 
-  const srcdocDocument = new DOMParser().parseFromString(srcdoc, "text/html");
-  const link = srcdocDocument.querySelector<HTMLAnchorElement>("a[href]");
-  const href = link?.getAttribute("href") ?? "";
-  const liveUrl = parseUrl(href);
-  if (liveUrl?.pathname !== expectedLivePath) return { kind: "unknown", secretId: null };
-
-  const secretId = normalizeId(liveUrl.searchParams.get("secret"));
-  return secretId ? { kind: "dormant", secretId } : { kind: "unknown", secretId: null };
+  const secretId = normalizeId(url.searchParams.get("secret"));
+  return secretId
+    ? { kind: "legacy", secretId }
+    : { kind: "dormant", secretId: null };
 }
 
 function parseUrl(value: string): URL | null {

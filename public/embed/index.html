@@ -4,15 +4,16 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="./legacy.css" />
-  <title>Secret Vault Legacy Reference</title>
+  <title>Secret Vault Dormant Reference</title>
 </head>
 <body>
   <main class="legacy-card">
     <div class="identity">
-      <strong>🔐 Secret Vault</strong>
-      <span>旧版引用已休眠 · 不会连接插件</span>
+      <strong id="label">🔐 Secret Vault</strong>
+      <span id="meta">静态休眠引用 · 未连接秘密库</span>
     </div>
-    <span class="migration-hint">请在秘密库 → 数据与迁移中升级</span>
+    <a id="connect" class="connect" href="./live.html">连接</a>
   </main>
+  <script src="./dormant.js"></script>
 </body>
 </html>
