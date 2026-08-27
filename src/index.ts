@@ -11,6 +11,8 @@ import { ProtyleContextRegistry } from "./editor/protyle-context";
 // import { SecretBlockHeightController } from "./editor/secret-block-height";
 import { SecretDialogs } from "./editor/secret-dialogs";
 import { SecretReferenceService } from "./editor/secret-reference";
+import { LegacyReferenceV1ToV2Migration } from "./migrations/legacy-reference-v1-to-v2";
+import type { MigrationTask } from "./migrations/types";
 import { VAULT_CONTEXT_ID } from "./types";
 import VaultApp from "./ui/VaultApp.svelte";
 import { VaultController } from "./vault";
@@ -27,6 +29,7 @@ export default class SecretVaultPlugin extends Plugin {
   private contexts!: ProtyleContextRegistry;
   private references!: SecretReferenceService;
   private dialogs!: SecretDialogs;
+  private migrationTasks: MigrationTask[] = [];
   private broker: EmbedSessionBroker | null = null;
 
   async onload(): Promise<void> {
@@ -36,6 +39,9 @@ export default class SecretVaultPlugin extends Plugin {
     this.contexts = new ProtyleContextRegistry();
     this.references = new SecretReferenceService(this.name);
     this.dialogs = new SecretDialogs(this.vault, this.references, this.contexts);
+    this.migrationTasks = [
+      new LegacyReferenceV1ToV2Migration(this.name, this.vault, this.references),
+    ];
 
     // Register UI/editor integrations before the first await. SiYuan may restore
     // tabs and Protyles while plugin data is still loading.
@@ -68,7 +74,7 @@ export default class SecretVaultPlugin extends Plugin {
     this.broker.start();
 
     // Optional kernel-owned height capability is implemented and type-checked
-    // in editor/secret-block-height.ts, but intentionally disconnected in 0.4.0.
+    // in editor/secret-block-height.ts, but intentionally disconnected in 0.4.x.
     // const blockHeights = new SecretBlockHeightController();
     // (No live-session presentation edge is wired to blockHeights yet.)
 
@@ -137,6 +143,7 @@ export default class SecretVaultPlugin extends Plugin {
             vault: plugin.vault,
             contextId: VAULT_CONTEXT_ID,
             insertSecret: (secretId: string) => plugin.insertSecretFromVault(secretId),
+            migrationTasks: plugin.migrationTasks,
           },
         });
       },

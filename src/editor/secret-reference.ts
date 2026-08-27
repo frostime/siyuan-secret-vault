@@ -17,6 +17,11 @@ export type SecretReferenceSource = Pick<
   "id" | "groupId" | "label" | "createdAt" | "updatedAt"
 >;
 
+export interface DormantReferenceDefinition {
+  markdown: string;
+  attrs: Record<string, string>;
+}
+
 export interface SlashTarget {
   insertion: BlockInsertionTarget;
   cleanupBlockId: string | null;
@@ -70,6 +75,37 @@ export class SecretReferenceService {
     await this.insert(secret, groupName, slashTarget.insertion, slashTarget.cleanupBlockId);
   }
 
+  /** Builds the complete persistent v2 representation without writing it. */
+  buildDormantReference(
+    secret: SecretReferenceSource,
+    groupName: string,
+    existingStyle = "",
+  ): DormantReferenceDefinition {
+    const liveHref = `/plugins/${this.pluginName}/embed/live.html?secret=${encodeURIComponent(secret.id)}`;
+    const srcdoc = buildDormantSrcdoc(secret.label, groupName, liveHref);
+    const markdown = [
+      '<iframe loading="lazy"',
+      ` srcdoc="${escapeHtmlAttribute(srcdoc)}"`,
+      ` style="width: 100%; height: 100%; border: 0; border-radius: 6px;"`,
+      "></iframe>",
+    ].join("");
+
+    return {
+      markdown,
+      attrs: {
+        "custom-secret-vault": "1",
+        "custom-secret-id": secret.id,
+        "custom-secret-group": secret.groupId,
+        "custom-secret-label": secret.label,
+        "custom-secret-group-name": groupName,
+        "custom-secret-created-at": String(secret.createdAt),
+        "custom-secret-updated-at": String(secret.updatedAt),
+        "custom-secret-version": REFERENCE_VERSION,
+        style: mergeInitialHeight(existingStyle, DEFAULT_EMBED_HEIGHT),
+      },
+    };
+  }
+
   /** Validates the authoritative reference identity during an explicit session handshake. */
   async matchesReference(blockId: string, secretId: string): Promise<boolean> {
     const attrs = await getBlockAttrs(blockId);
@@ -96,16 +132,8 @@ export class SecretReferenceService {
     target: BlockInsertionTarget,
     cleanupBlockId: string | null,
   ): Promise<void> {
-    const liveHref = `/plugins/${this.pluginName}/embed/live.html?secret=${encodeURIComponent(secret.id)}`;
-    const srcdoc = buildDormantSrcdoc(secret.label, groupName, liveHref);
-    const iframe = [
-      '<iframe loading="lazy"',
-      ` srcdoc="${escapeHtmlAttribute(srcdoc)}"`,
-      ` style="width: 100%; height: 100%; border: 0; border-radius: 6px;"`,
-      "></iframe>",
-    ].join("");
-
-    const inserted = await insertMarkdownBlock(iframe, target);
+    const initialDefinition = this.buildDormantReference(secret, groupName);
+    const inserted = await insertMarkdownBlock(initialDefinition.markdown, target);
 
     // Standalone <iframe> must become a real NodeIFrame. Fail closed if a
     // future Lute version changes this parse rule.
@@ -116,17 +144,8 @@ export class SecretReferenceService {
 
     try {
       const attrs = await getBlockAttrs(inserted.id);
-      await setBlockAttrs(inserted.id, {
-        "custom-secret-vault": "1",
-        "custom-secret-id": secret.id,
-        "custom-secret-group": secret.groupId,
-        "custom-secret-label": secret.label,
-        "custom-secret-group-name": groupName,
-        "custom-secret-created-at": String(secret.createdAt),
-        "custom-secret-updated-at": String(secret.updatedAt),
-        "custom-secret-version": REFERENCE_VERSION,
-        style: mergeInitialHeight(attrs.style ?? "", DEFAULT_EMBED_HEIGHT),
-      });
+      const definition = this.buildDormantReference(secret, groupName, attrs.style ?? "");
+      await setBlockAttrs(inserted.id, definition.attrs);
     } catch (error) {
       await deleteBlock(inserted.id).catch(() => undefined);
       throw error;

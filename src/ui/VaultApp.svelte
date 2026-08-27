@@ -3,17 +3,21 @@
   import { showMessage } from "siyuan";
   import type { AccessContextId, PublicSecretState, VaultSnapshot } from "../types";
   import type { VaultController } from "../vault";
+  import type { MigrationPreview, MigrationRunResult, MigrationTask } from "../migrations/types";
 
   type DetailMode = "view" | "create" | "edit";
+  type WorkspaceSection = "vault" | "migrations";
 
   let {
     vault,
     contextId,
     insertSecret,
+    migrationTasks,
   } = $props<{
     vault: VaultController;
     contextId: AccessContextId;
     insertSecret: (secretId: string) => Promise<void>;
+    migrationTasks: MigrationTask[];
   }>();
 
   let snapshot = $state<VaultSnapshot>({
@@ -46,6 +50,13 @@
   let showPasswordDialog = $state(false);
   let replacementPassword = $state("");
 
+  let workspaceSection = $state<WorkspaceSection>("vault");
+  let selectedMigrationId = $state(migrationTasks[0]?.id ?? "");
+  let migrationPreview = $state<MigrationPreview | null>(null);
+  let migrationResult = $state<MigrationRunResult | null>(null);
+  let migrationBusy = $state(false);
+  let migrationError = $state("");
+
   const selectedGroup = $derived(
     snapshot.groups.find((group) => group.id === selectedGroupId) ?? snapshot.groups[0],
   );
@@ -61,6 +72,10 @@
 
   const selectedSecret = $derived(
     snapshot.secrets.find((secret) => secret.id === selectedSecretId) ?? null,
+  );
+
+  const selectedMigration = $derived(
+    migrationTasks.find((task) => task.id === selectedMigrationId) ?? migrationTasks[0] ?? null,
   );
 
   const dateTime = new Intl.DateTimeFormat(undefined, {
@@ -230,14 +245,15 @@
       if (!secretId) return;
       selectedSecretId = secretId;
     } else if (detailMode === "edit" && editingSecretId) {
+      const secretId = editingSecretId;
       const result = await run(() => vault.updateSecret(
         contextId,
-        editingSecretId,
+        secretId,
         editorLabel,
         editorContent,
       ));
       if (result === undefined && errorText) return;
-      selectedSecretId = editingSecretId;
+      selectedSecretId = secretId;
     }
 
     detailMode = "view";
@@ -296,6 +312,54 @@
     showPasswordDialog = false;
     void refreshDetailContent();
   }
+
+  function openMigrations() {
+    workspaceSection = "migrations";
+    migrationError = "";
+  }
+
+  function openVaultWorkspace() {
+    workspaceSection = "vault";
+    migrationError = "";
+  }
+
+  function selectMigration(taskId: string) {
+    selectedMigrationId = taskId;
+    migrationPreview = null;
+    migrationResult = null;
+    migrationError = "";
+  }
+
+  async function inspectMigration() {
+    if (!selectedMigration || migrationBusy) return;
+    migrationBusy = true;
+    migrationError = "";
+    migrationResult = null;
+    try {
+      migrationPreview = await selectedMigration.inspect();
+    } catch (error) {
+      migrationPreview = null;
+      migrationError = error instanceof Error ? error.message : String(error);
+    } finally {
+      migrationBusy = false;
+    }
+  }
+
+  async function runMigrationTask() {
+    if (!selectedMigration || !migrationPreview || migrationPreview.ready === 0 || migrationBusy) return;
+    if (!confirm(`将串行迁移 ${migrationPreview.ready} 个文档引用。建议先关闭包含旧引用的文档，并确保思源同步已完成。是否继续？`)) return;
+
+    migrationBusy = true;
+    migrationError = "";
+    try {
+      migrationResult = await selectedMigration.run(migrationPreview);
+      migrationPreview = await selectedMigration.inspect();
+    } catch (error) {
+      migrationError = error instanceof Error ? error.message : String(error);
+    } finally {
+      migrationBusy = false;
+    }
+  }
 </script>
 
 <div class="vault-shell">
@@ -305,60 +369,90 @@
         <span class="vault-brand-icon">🔐</span>
         <span>Secret Vault</span>
       </div>
-      <button
-        class="vault-icon-button"
-        title="新建分组"
-        aria-label="新建分组"
-        onclick={() => {
-          showGroupCreator = !showGroupCreator;
-          errorText = "";
-        }}
-      >+</button>
+      {#if workspaceSection === "vault"}
+        <button
+          class="vault-icon-button"
+          title="新建分组"
+          aria-label="新建分组"
+          onclick={() => {
+            showGroupCreator = !showGroupCreator;
+            errorText = "";
+          }}
+        >+</button>
+      {/if}
     </div>
 
-    {#if showGroupCreator}
-      <section class="vault-inline-card vault-group-creator">
-        <label>
-          <span>分组名称</span>
-          <input class="b3-text-field" bind:value={groupName} autocomplete="off" />
-        </label>
-        <label>
-          <span>口令</span>
-          <input
-            class="b3-text-field"
-            type="password"
-            autocomplete="new-password"
-            bind:value={groupPassword}
-            onkeydown={(event) => {
-              if (event.key === "Enter" && !busy) void createGroupInline();
-            }}
-          />
-        </label>
-        <div class="vault-inline-actions">
-          <button class="vault-quiet-button" disabled={busy} onclick={() => showGroupCreator = false}>取消</button>
-          <button class="b3-button b3-button--text" disabled={busy} onclick={createGroupInline}>创建</button>
-        </div>
-      </section>
-    {/if}
+    {#if workspaceSection === "vault"}
+      {#if showGroupCreator}
+        <section class="vault-inline-card vault-group-creator">
+          <label>
+            <span>分组名称</span>
+            <input class="b3-text-field" bind:value={groupName} autocomplete="off" />
+          </label>
+          <label>
+            <span>口令</span>
+            <input
+              class="b3-text-field"
+              type="password"
+              autocomplete="new-password"
+              bind:value={groupPassword}
+              onkeydown={(event) => {
+                if (event.key === "Enter" && !busy) void createGroupInline();
+              }}
+            />
+          </label>
+          <div class="vault-inline-actions">
+            <button class="vault-quiet-button" disabled={busy} onclick={() => showGroupCreator = false}>取消</button>
+            <button class="b3-button b3-button--text" disabled={busy} onclick={createGroupInline}>创建</button>
+          </div>
+        </section>
+      {/if}
 
-    <nav class="vault-group-list">
-      {#each snapshot.groups as group}
-        <button
-          class="vault-group"
-          class:active={group.id === selectedGroupId}
-          onclick={() => selectGroup(group.id)}
-        >
-          <span class="vault-group-name">{group.name}</span>
-          <span class="vault-group-meta">
-            <span>{group.secretCount}</span>
-            <span class="vault-dot" aria-hidden="true">·</span>
-            <span>{group.unlocked ? "已解锁" : group.initialized ? "已锁定" : "未设口令"}</span>
-          </span>
-        </button>
-      {/each}
-    </nav>
+      <nav class="vault-group-list">
+        {#each snapshot.groups as group}
+          <button
+            class="vault-group"
+            class:active={group.id === selectedGroupId}
+            onclick={() => selectGroup(group.id)}
+          >
+            <span class="vault-group-name">{group.name}</span>
+            <span class="vault-group-meta">
+              <span>{group.secretCount}</span>
+              <span class="vault-dot" aria-hidden="true">·</span>
+              <span>{group.unlocked ? "已解锁" : group.initialized ? "已锁定" : "未设口令"}</span>
+            </span>
+          </button>
+        {/each}
+      </nav>
+
+      <button class="vault-maintenance-entry" onclick={openMigrations}>
+        <span>数据与迁移</span>
+        <span aria-hidden="true">›</span>
+      </button>
+    {:else}
+      <nav class="vault-migration-nav" aria-label="迁移任务">
+        <div class="vault-nav-section-label">MAINTENANCE</div>
+        {#each migrationTasks as task}
+          <button
+            class="vault-group"
+            class:active={task.id === selectedMigrationId}
+            onclick={() => selectMigration(task.id)}
+          >
+            <span class="vault-group-name">{task.title}</span>
+            <span class="vault-group-meta">显式维护任务</span>
+          </button>
+        {:else}
+          <div class="vault-empty-list">当前没有迁移任务</div>
+        {/each}
+      </nav>
+      <button class="vault-maintenance-entry active" onclick={openVaultWorkspace}>
+        <span aria-hidden="true">‹</span>
+        <span>返回秘密库</span>
+      </button>
+    {/if}
   </aside>
 
+  {#if workspaceSection === "vault"}
   <section class="vault-secrets" aria-label="秘密列表">
     {#if selectedGroup}
       <header class="vault-list-header">
@@ -553,6 +647,91 @@
       </div>
     {/if}
   </main>
+  {:else}
+    <main class="vault-migration-workspace">
+      {#if selectedMigration}
+        <section class="vault-migration-panel">
+          <header class="vault-migration-header">
+            <div>
+              <div class="vault-eyebrow">DATA & MIGRATIONS</div>
+              <h1>{selectedMigration.title}</h1>
+              <p>{selectedMigration.description}</p>
+            </div>
+            <button class="b3-button b3-button--outline" disabled={migrationBusy} onclick={inspectMigration}>
+              {migrationBusy ? "处理中…" : migrationPreview ? "重新扫描" : "扫描旧版引用"}
+            </button>
+          </header>
+
+          {#if migrationPreview}
+            <section class="vault-migration-summary" aria-label="扫描结果">
+              <div><strong>{migrationPreview.total}</strong><span>发现</span></div>
+              <div><strong>{migrationPreview.ready}</strong><span>可迁移</span></div>
+              <div class:warn={migrationPreview.issues > 0}><strong>{migrationPreview.issues}</strong><span>需要处理</span></div>
+            </section>
+
+            <div class="vault-migration-actions">
+              <span>扫描只读，不会打开文档；迁移前建议关闭包含旧引用的文档。</span>
+              <button
+                class="b3-button b3-button--text"
+                disabled={migrationBusy || migrationPreview.ready === 0}
+                onclick={runMigrationTask}
+              >开始迁移 {migrationPreview.ready > 0 ? `(${migrationPreview.ready})` : ""}</button>
+            </div>
+
+            <section class="vault-migration-items">
+              {#each migrationPreview.items as item}
+                <article class="vault-migration-item" class:issue={item.status === "issue"}>
+                  <div class="vault-migration-item-main">
+                    <div class="vault-migration-item-title">
+                      <span class="vault-migration-status" aria-hidden="true">{item.status === "ready" ? "✓" : "!"}</span>
+                      <strong>{item.label || item.secretId || "无法识别的引用"}</strong>
+                    </div>
+                    <span class="vault-migration-path">{item.documentPath}</span>
+                    <span class="vault-migration-note">{item.note}</span>
+                  </div>
+                  <code class="vault-block-id" title="块 ID，可选中复制">{item.blockId}</code>
+                </article>
+              {:else}
+                <div class="vault-migration-empty">没有发现需要迁移的旧版引用。</div>
+              {/each}
+            </section>
+          {:else}
+            <section class="vault-migration-intro">
+              <strong>不会自动扫描或修改工作区</strong>
+              <p>迁移中心是长期维护入口。升级插件不会触发文档扫描；扫描不会打开旧文档。只有你主动执行任务时，迁移器才会串行更新对应块。</p>
+            </section>
+          {/if}
+
+          {#if migrationResult}
+            <section class="vault-migration-result">
+              <strong>本次迁移：{migrationResult.migrated} 已迁移，{migrationResult.skipped} 已跳过，{migrationResult.failed} 失败</strong>
+              {#if migrationResult.failed > 0}
+                <p>检测到失败后已停止后续写入。请检查失败项，再重新扫描。</p>
+                <details>
+                  <summary>查看失败项</summary>
+                  <ul>
+                    {#each migrationResult.items.filter((item) => !item.ok) as item}
+                      <li><code>{item.blockId}</code> — {item.message}</li>
+                    {/each}
+                  </ul>
+                </details>
+              {/if}
+            </section>
+          {/if}
+
+          {#if migrationError}
+            <div class="vault-error">{migrationError}</div>
+          {/if}
+
+          <footer class="vault-migration-future">
+            <span>未来的 Vault schema、引用格式或加密元数据迁移会继续放在这里。</span>
+          </footer>
+        </section>
+      {:else}
+        <div class="vault-detail-empty">当前没有迁移任务。</div>
+      {/if}
+    </main>
+  {/if}
 </div>
 
 {#if showPasswordDialog}

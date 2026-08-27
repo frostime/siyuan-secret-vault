@@ -79,3 +79,15 @@ export async function getBlockKramdown(id: string): Promise<string> {
   const data = await kernelPost<{ kramdown?: string }>("/api/block/getBlockKramdown", { id });
   return data?.kramdown ?? "";
 }
+
+export async function querySql<T = Record<string, unknown>>(stmt: string): Promise<T[]> {
+  return kernelPost<T[]>("/api/query/sql", { stmt });
+}
+
+export async function updateMarkdownBlock(id: string, markdown: string): Promise<void> {
+  await kernelPost("/api/block/updateBlock", {
+    id,
+    dataType: "markdown",
+    data: markdown,
+  });
+}

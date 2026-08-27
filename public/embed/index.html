@@ -4,20 +4,15 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="./legacy.css" />
-  <title>Secret Vault</title>
+  <title>Secret Vault Legacy Reference</title>
 </head>
 <body>
   <main class="legacy-card">
     <div class="identity">
       <strong>🔐 Secret Vault</strong>
-      <span>旧版静态引用 · 不会自动连接</span>
+      <span>旧版引用已休眠 · 不会连接插件</span>
     </div>
-    <a id="connect" class="connect" aria-disabled="true">连接</a>
+    <span class="migration-hint">请在秘密库 → 数据与迁移中升级</span>
   </main>
-  <p id="error" class="error" hidden>此旧版引用缺少 Secret ID。</p>
-
-  <!-- This script is local-only: it only preserves the legacy ?secret= value
-       in the explicit link. It never contacts the parent plugin. -->
-  <script type="module" src="./legacy.js"></script>
 </body>
 </html>

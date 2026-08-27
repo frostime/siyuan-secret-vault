@@ -83,6 +83,12 @@ Owns only:
 
 It deliberately knows nothing about Secret Vault URL paths or protocol messages.
 
+### `MigrationTask` / `LegacyReferenceV1ToV2Migration`
+
+Own explicit, user-triggered maintenance transformations exposed by the Vault tab. Migration tasks own discovery, validation, sequential writes, verification, and retry semantics. The Vault UI only renders task state and progress.
+
+The v1 -> v2 task treats `custom-secret-id` as authoritative, cross-checks legacy iframe identity, refuses conflicts instead of guessing, re-validates each block immediately before writing, and reuses `SecretReferenceService` to build the canonical v2 representation. No migration runs during plugin startup.
+
 ### `EmbedSessionBroker`
 
 Owns temporary live iframe sessions.
@@ -130,11 +136,11 @@ The initial live connection is itself user-triggered. Loading the document is no
 
 ### Legacy v1 reference
 
-Existing v1 documents are not bulk migrated.
+Existing v1 documents are never migrated automatically.
 
-`public/embed/index.html` is now a dormant compatibility shell. Its only script reads the existing `?secret=` query value and copies it into the local `连接` link. It never contacts the parent plugin.
+`public/embed/index.html` is a zero-JavaScript dormant compatibility shell. It does not parse query parameters, contact the parent plugin, connect to the Vault, or offer a live-session path. It only tells the user to open `秘密库 -> 数据与迁移`.
 
-This means installing 0.4 immediately removes automatic Vault traffic from existing v1 references without rewriting `.sy` documents.
+The Vault tab contains an explicit migration center. Its v1 -> v2 task performs a read-only SQL scan first, shows ready/problem counts, and only rewrites documents after the user confirms `开始迁移`. Blocks are processed serially and retain their existing block IDs.
 
 Newly inserted references naturally use v2.
 
@@ -179,7 +185,7 @@ Plugin unload is broker-owned and similarly revokes all currently live sessions 
 
 ## Height capability
 
-Dynamic height is intentionally **disconnected in 0.4.0** while the dormant/live ownership model is validated.
+Dynamic height is intentionally **disconnected in 0.4.x** while the dormant/live ownership model is validated.
 
 `src/editor/secret-block-height.ts` contains an isolated kernel-owned implementation that:
 
@@ -192,7 +198,7 @@ Dynamic height is intentionally **disconnected in 0.4.0** while the dormant/live
 
 The composition root intentionally does not instantiate or connect it. The commented integration marker in `src/index.ts` makes this decision explicit.
 
-0.4.0 therefore uses a fixed reference height and iframe-internal scrolling. Re-enabling height later must be an explicit document-presentation feature, not an automatic measurement feedback loop.
+0.4.x therefore uses a fixed reference height and iframe-internal scrolling. Re-enabling height later must be an explicit document-presentation feature, not an automatic measurement feedback loop.
 
 ## Debug story
 
@@ -214,11 +220,10 @@ After connection, one iframe's requests remain on that port. There is no global 
 
 If a live iframe unexpectedly clears, inspect an `AuthorizationRevocation` reason. If an ordinary Vault edit unexpectedly changes a dormant reference, that is an architecture violation.
 
-## YAGNI cuts in 0.4.0
+## YAGNI cuts in 0.4.x
 
 Not built or not enabled:
 
-- workspace-wide reference migration;
 - automatic snapshot synchronization;
 - BroadcastChannel;
 - visibility observers;
@@ -252,3 +257,22 @@ Document/live session -> explicit Vault request
 Vault/access boundary -> live session revoke
 SecretReferenceService -> kernel-owned persistent block representation
 ```
+
+
+## Migration center
+
+Migration is a permanent maintenance surface in the Vault tab, not a startup side effect.
+
+Allowed control flow:
+
+```text
+user opens 数据与迁移
+    -> choose MigrationTask
+    -> inspect()        # read-only
+    -> preview
+    -> explicit confirm
+    -> run(preview)     # sequential kernel writes
+    -> verify each block
+```
+
+A task must not duplicate the canonical representation it migrates to. The v1 -> v2 task calls `SecretReferenceService.buildDormantReference()` so insertion and migration cannot silently drift into different v2 formats.
