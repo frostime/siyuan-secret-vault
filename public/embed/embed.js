@@ -3,6 +3,7 @@ const V = 1;
 
 const FAST_TIMEOUT_MS = 8_000;
 const INTERACTIVE_TIMEOUT_MS = 10 * 60_000;
+const HOST_UNAVAILABLE_MESSAGE = "秘密库插件未启用或当前不可用";
 
 const secretId = new URLSearchParams(location.search).get("secret") || "";
 const pending = new Map();
@@ -12,6 +13,7 @@ let currentState = null;
 let editing = false;
 let refreshPromise = null;
 let resizeScheduled = false;
+let hostPhase = "unknown";
 
 const el = {
   app: document.getElementById("app"),
@@ -55,11 +57,11 @@ function request(type, data) {
       reject(new Error(
         timeoutMs === INTERACTIVE_TIMEOUT_MS
           ? "操作等待超时"
-          : "插件未响应",
+          : HOST_UNAVAILABLE_MESSAGE,
       ));
     }, timeoutMs);
 
-    pending.set(requestId, { resolve, timeout });
+    pending.set(requestId, { resolve, reject, timeout });
     parent.postMessage({ ns: NS, v: V, requestId, type, secretId, data }, location.origin);
   });
 }
@@ -103,17 +105,64 @@ function setError(message = "", retryable = false) {
   el.retry.hidden = !message || !retryable;
 }
 
-function setUnavailable(message) {
+function clearSensitiveState() {
+  currentState = null;
   editing = false;
-  el.app.classList.remove("state-loading");
-  el.app.classList.add("state-unavailable");
-  el.status.textContent = "!";
-  el.meta.textContent = "连接失败";
+
+  // content and editContent may contain decrypted secret material. Keep this
+  // cleanup explicit so leaving the connected host lifecycle state always
+  // destroys iframe-owned plaintext, independently from parent-side key cleanup.
+  el.content.textContent = "";
+  el.editContent.value = "";
+  el.editLabel.value = "";
+  el.label.textContent = "Secret";
   el.unlock.hidden = true;
   el.content.hidden = true;
   el.editor.hidden = true;
   el.actions.hidden = true;
+}
+
+function rejectPending(error) {
+  for (const waiter of pending.values()) {
+    clearTimeout(waiter.timeout);
+    waiter.reject(error);
+  }
+  pending.clear();
+}
+
+function setLoading(meta = "连接中…") {
+  el.app.classList.add("state-loading");
+  el.app.classList.remove("state-unavailable");
+  el.status.textContent = "•••";
+  el.meta.textContent = meta;
+  setError();
+}
+
+function setUnavailable(message) {
+  clearSensitiveState();
+  el.app.classList.remove("state-loading");
+  el.app.classList.add("state-unavailable");
+  el.status.textContent = "!";
+  el.meta.textContent = "插件不可用";
   setError(message, true);
+}
+
+function handleHostStopping() {
+  hostPhase = "stopped";
+  setUnavailable(HOST_UNAVAILABLE_MESSAGE);
+  rejectPending(new Error(HOST_UNAVAILABLE_MESSAGE));
+}
+
+function handleHostReady() {
+  const wasStopped = hostPhase === "stopped";
+  hostPhase = "ready";
+
+  // A frame may remain mounted while the plugin is disabled and later enabled
+  // again. Reconnect once on the host lifecycle signal; never poll.
+  if (wasStopped || el.app.classList.contains("state-unavailable")) {
+    setLoading("重新连接中…");
+    void refresh();
+  }
 }
 
 function renderState(state) {
@@ -148,6 +197,7 @@ async function performRefresh() {
   try {
     const response = await request("secret:get-state");
     if (!response.ok) throw new Error(response.error || "读取状态失败");
+    hostPhase = "ready";
     renderState(response.data);
   } catch (error) {
     setUnavailable(error?.message || String(error));
@@ -223,6 +273,16 @@ window.addEventListener("message", (event) => {
   const message = event.data;
   if (!message || message.ns !== NS || message.v !== V) return;
 
+  if (message.type === "host:stopping") {
+    handleHostStopping();
+    return;
+  }
+
+  if (message.type === "host:ready") {
+    handleHostReady();
+    return;
+  }
+
   if (message.type === "invalidate") {
     handleInvalidation(message.invalidation);
     return;
@@ -240,30 +300,33 @@ window.addEventListener("message", (event) => {
 
 channel.addEventListener("message", (event) => {
   const message = event.data;
-  if (
-    !message
-    || message.ns !== NS
-    || message.v !== V
-    || message.type !== "invalidate"
-  ) {
+  if (!message || message.ns !== NS || message.v !== V) return;
+
+  if (message.type === "host:stopping") {
+    handleHostStopping();
     return;
   }
-  handleInvalidation(message.invalidation);
+
+  if (message.type === "host:ready") {
+    handleHostReady();
+    return;
+  }
+
+  if (message.type === "invalidate") {
+    handleInvalidation(message.invalidation);
+  }
 });
 
 window.addEventListener("beforeunload", () => {
+  clearSensitiveState();
   channel.close();
   for (const waiter of pending.values()) clearTimeout(waiter.timeout);
   pending.clear();
 }, { once: true });
 
 el.retry.addEventListener("click", () => {
-  el.app.classList.add("state-loading");
-  el.app.classList.remove("state-unavailable");
+  setLoading("重新连接中…");
   el.retry.disabled = true;
-  el.meta.textContent = "重新连接中…";
-  el.status.textContent = "•••";
-  setError();
 
   void refresh().finally(() => {
     el.retry.disabled = false;

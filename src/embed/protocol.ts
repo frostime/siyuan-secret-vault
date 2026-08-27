@@ -37,6 +37,12 @@ export interface EmbedInvalidationMessage {
   invalidation: VaultInvalidation;
 }
 
+export interface EmbedHostLifecycleMessage {
+  ns: typeof PROTOCOL_NS;
+  v: typeof PROTOCOL_VERSION;
+  type: "host:ready" | "host:stopping";
+}
+
 export interface EmbedResizeMessage {
   ns: typeof PROTOCOL_NS;
   v: typeof PROTOCOL_VERSION;

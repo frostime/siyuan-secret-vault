@@ -109,9 +109,19 @@ export default class SecretVaultPlugin extends Plugin {
     this.unregisterEditorEvents();
     this.unsubscribeInvalidations?.();
     this.unsubscribeInvalidations = null;
+
+    // Broker disposal broadcasts host:stopping first so any surviving document
+    // iframes are promptly instructed to drop rendered plaintext as the host exits.
     this.broker?.dispose();
     this.broker = null;
     this.vault?.dispose();
+  }
+
+  uninstall(): void {
+    // Vault data is intentionally retained. Uninstalling for troubleshooting or
+    // reinstalling the same plugin must not implicitly destroy encrypted user
+    // data or rewrite document references. Permanent data deletion should be an
+    // explicit Vault action, not a plugin lifecycle side effect.
   }
 
   async onDataChanged(): Promise<void> {

@@ -6,6 +6,7 @@ import {
   isEmbedResizeMessage,
   PROTOCOL_NS,
   PROTOCOL_VERSION,
+  type EmbedHostLifecycleMessage,
   type EmbedInvalidationMessage,
   type EmbedResponse,
 } from "./protocol";
@@ -29,20 +30,48 @@ export class EmbedBroker {
 
   start(): void {
     window.addEventListener("message", this.onMessage);
+
+    // Existing restored iframes can survive a plugin disable/re-enable cycle.
+    // Announce readiness only after persisted vault data has finished loading so
+    // those frames can reconnect without polling. A newly created frame that
+    // misses this one-shot broadcast still succeeds through its initial request.
+    void this.ready.then(
+      () => {
+        if (!this.disposed) this.announceHost("host:ready");
+      },
+      () => undefined,
+    );
   }
 
   dispose(): void {
+    if (this.disposed) return;
+
+    // Prompt surviving iframe documents to wipe already-rendered plaintext as
+    // the host exits. Delivery is intentionally best-effort; if the iframe is
+    // already gone there is nothing left to clear.
+    this.announceHost("host:stopping");
     this.disposed = true;
     window.removeEventListener("message", this.onMessage);
     this.channel.close();
   }
 
   invalidate(invalidation: VaultInvalidation): void {
+    if (this.disposed) return;
+
     const message: EmbedInvalidationMessage = {
       ns: PROTOCOL_NS,
       v: PROTOCOL_VERSION,
       type: "invalidate",
       invalidation,
+    };
+    this.channel.postMessage(message);
+  }
+
+  private announceHost(type: EmbedHostLifecycleMessage["type"]): void {
+    const message: EmbedHostLifecycleMessage = {
+      ns: PROTOCOL_NS,
+      v: PROTOCOL_VERSION,
+      type,
     };
     this.channel.postMessage(message);
   }
