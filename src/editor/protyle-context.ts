@@ -8,17 +8,13 @@ export interface ResolvedEmbed {
 }
 
 /**
- * Owns identity and DOM lookup for Protyle-scoped Secret access.
+ * Owns Protyle identity and the one-time mapping from a child Window to its
+ * document context.
  *
- * Context IDs live only for the lifetime of a Protyle instance. Reopening the
- * same document creates a new context and therefore requires authentication
- * again, which is the intended security boundary.
- *
- * SiYuan can keep an opened Protyle mounted while a custom tab is active, and
- * `getAllEditor()` is not a reliable identity source in every tab/layout state.
- * We therefore remember Protyles when lifecycle events expose them and resolve
- * embeds primarily from their actual DOM ancestry. `getAllEditor()` is only a
- * recovery path for Protyles that existed before this registry started.
+ * The registry deliberately knows nothing about Secret Vault URLs or live
+ * session protocol. EmbedSessionBroker validates Secret reference attributes
+ * separately. Once a live session is connected, its MessagePort carries the
+ * context identity and no further DOM lookup is needed.
  */
 export class ProtyleContextRegistry {
   private readonly contextByProtyle = new WeakMap<Protyle, AccessContextId>();
@@ -27,8 +23,6 @@ export class ProtyleContextRegistry {
   private readonly contextBySource = new WeakMap<Window, AccessContextId>();
   private readonly frameBySource = new WeakMap<Window, HTMLIFrameElement>();
   private lastActiveProtyle: Protyle | null = null;
-
-  constructor(private readonly pluginName: string) {}
 
   capture(protyle: Protyle): AccessContextId {
     this.lastActiveProtyle = protyle;
@@ -60,9 +54,6 @@ export class ProtyleContextRegistry {
   }
 
   getTargetProtyle(): Protyle | null {
-    // Keep the last real document target even while the Secret Vault custom tab
-    // is active. Requiring it to appear in getAllEditor() made hidden-but-open
-    // document tabs look as if no insertion target existed.
     if (this.isUsableProtyle(this.lastActiveProtyle)) {
       return this.lastActiveProtyle;
     }
@@ -93,25 +84,22 @@ export class ProtyleContextRegistry {
       if (blockId) return { contextId: cachedContext, frame: cachedFrame, blockId };
     }
 
-    const frame = this.findOwnEmbedFrame(source);
+    const frame = this.findSourceFrame(source);
     if (!frame) return null;
 
-    // Fast path: lifecycle capture registered the Protyle/editor DOM already.
     const rememberedContext = this.findContextInAncestors(frame);
     if (rememberedContext) {
       return this.cacheResolvedEmbed(source, frame, rememberedContext);
     }
 
-    // Secondary path: a remembered Protyle may have replaced one of its inner
-    // editor elements without emitting a capture event we observed.
     for (const [contextId, protyle] of this.protyleByContext) {
       if (!this.protyleContainsFrame(protyle, frame)) continue;
       this.rememberProtyle(contextId, protyle);
       return this.cacheResolvedEmbed(source, frame, contextId);
     }
 
-    // Last-resort recovery for Protyles restored before this plugin finished
-    // loading. Use the broad Protyle root, not only wysiwyg.element.
+    // Last-resort recovery for a Protyle restored before this plugin observed a
+    // lifecycle event. This happens only on explicit live-session connection.
     for (const protyle of getAllEditor()) {
       if (!this.protyleContainsFrame(protyle, frame)) continue;
       const contextId = this.contextFor(protyle);
@@ -175,53 +163,36 @@ export class ProtyleContextRegistry {
     return block?.dataset.nodeId ?? null;
   }
 
-  private findOwnEmbedFrame(source: Window): HTMLIFrameElement | null {
+  private findSourceFrame(source: Window): HTMLIFrameElement | null {
     const cached = this.frameBySource.get(source);
-    if (
-      cached?.isConnected
-      && cached.contentWindow === source
-      && this.isOwnEmbedFrame(cached)
-    ) {
+    if (cached?.isConnected && cached.contentWindow === source) {
       return cached;
     }
 
     try {
-      // Avoid instanceof here: Window.frameElement can cross a same-origin
-      // realm boundary, where instanceof checks are unnecessarily brittle.
+      // Window.frameElement is the cheapest and most precise mapping. Avoid an
+      // instanceof check because same-origin realm boundaries make it brittle.
       const frameElement = source.frameElement;
-      if (
-        frameElement?.tagName === "IFRAME"
-        && frameElement.isConnected
-      ) {
+      if (frameElement?.tagName === "IFRAME" && frameElement.isConnected) {
         const frame = frameElement as HTMLIFrameElement;
-        if (frame.contentWindow === source && this.isOwnEmbedFrame(frame)) {
+        if (frame.contentWindow === source) {
           this.frameBySource.set(source, frame);
           return frame;
         }
       }
     } catch {
-      // A cross-origin Window would throw here. Secret Vault embeds are
-      // same-origin, so failure simply means this message is not ours.
+      // Cross-origin windows cannot participate because the broker has already
+      // required event.origin === window.location.origin.
     }
 
-    // Extremely defensive fallback. This is only used when frameElement cannot
-    // be resolved; successful resolution is cached so normal requests stay O(1).
+    // Defensive recovery only. Normal live sessions hit frameElement once and
+    // then remain on their dedicated MessagePort.
     for (const frame of document.querySelectorAll<HTMLIFrameElement>("iframe")) {
-      if (frame.contentWindow !== source || !this.isOwnEmbedFrame(frame)) continue;
+      if (frame.contentWindow !== source) continue;
       this.frameBySource.set(source, frame);
       return frame;
     }
 
     return null;
-  }
-
-  private isOwnEmbedFrame(frame: HTMLIFrameElement): boolean {
-    try {
-      const url = new URL(frame.src, window.location.href);
-      return url.origin === window.location.origin
-        && url.pathname === `/plugins/${this.pluginName}/embed/index.html`;
-    } catch {
-      return false;
-    }
   }
 }

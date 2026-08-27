@@ -6,8 +6,8 @@ import type { SecretReferenceService, SlashTarget } from "./secret-reference";
 
 /**
  * Owns the imperative SiYuan dialogs used from editor slash commands and
- * embedded frames. Password prompts are single-flight per context + group so
- * several Secret frames in one Protyle cannot open duplicate dialogs.
+ * explicit live embed sessions. Password prompts are single-flight per context +
+ * group so several connected Secret frames cannot open duplicate dialogs.
  */
 export class SecretDialogs {
   private readonly unlockFlights = new Map<string, Promise<boolean>>();
@@ -107,8 +107,14 @@ export class SecretDialogs {
             // open, but the selected Secret must still exist at commit time.
             const currentSecret = this.vault.getSecret(secret.id);
             if (!currentSecret) throw new Error("该秘密已被删除");
+            const currentGroup = this.vault.getGroup(currentSecret.groupId);
+            if (!currentGroup) throw new Error("秘密所属分组不存在");
 
-            await this.references.insertFromSlash(currentSecret, slashTarget);
+            await this.references.insertFromSlash(
+              currentSecret,
+              currentGroup.name,
+              slashTarget,
+            );
             dialog.destroy();
           } catch (error) {
             button.disabled = false;
@@ -218,8 +224,10 @@ export class SecretDialogs {
         );
         const secret = this.vault.getSecret(secretId);
         if (!secret) throw new Error("秘密创建成功，但无法重新读取其元数据");
+        const currentGroup = this.vault.getGroup(secret.groupId);
+        if (!currentGroup) throw new Error("秘密创建成功，但所属分组无法重新读取");
 
-        await this.references.insertFromSlash(secret, slashTarget);
+        await this.references.insertFromSlash(secret, currentGroup.name, slashTarget);
         dialog.destroy();
       } catch (errorValue) {
         setInlineError(error, errorMessage(errorValue));

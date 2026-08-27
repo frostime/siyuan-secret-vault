@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="./live.css" />
+  <title>Secret Vault Live Session</title>
+</head>
+<body>
+  <main id="app" class="secret-card state-loading">
+    <div class="header">
+      <div class="identity">
+        <strong id="label">Secret</strong>
+        <span id="meta">建立显式会话…</span>
+      </div>
+      <div class="header-actions">
+        <button id="unlock" class="primary-action" type="button" hidden>解锁</button>
+        <span id="status" class="status">•••</span>
+      </div>
+    </div>
+
+    <div id="timestamps" class="timestamps" hidden></div>
+    <pre id="content" class="content" hidden></pre>
+
+    <div id="editor" class="editor" hidden>
+      <input id="edit-label" class="edit-label" type="text" autocomplete="off" placeholder="Label" />
+      <textarea id="edit-content" class="edit-content" rows="4" spellcheck="false"></textarea>
+      <div class="editor-actions">
+        <button id="cancel" type="button">取消</button>
+        <button id="save" class="primary-action" type="button">保存</button>
+      </div>
+    </div>
+
+    <div id="error" class="error" hidden>
+      <span id="error-text"></span>
+      <button id="reconnect" type="button" hidden>重新连接</button>
+    </div>
+
+    <div id="actions" class="actions" hidden>
+      <button id="edit" type="button">编辑</button>
+      <button id="copy" type="button">复制</button>
+      <button id="refresh" type="button">刷新</button>
+      <button id="lock" type="button" title="只锁定当前文档中的这个分组">锁定</button>
+    </div>
+  </main>
+
+  <script type="module" src="./live.js"></script>
+</body>
+</html>

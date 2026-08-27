@@ -1,8 +1,8 @@
 {
   "name": "siyuan-secret-vault",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
-  "description": "Group-based encrypted secret vault with interactive SiYuan IFrame blocks",
+  "description": "Encrypted secret vault with dormant document references and explicit live sessions",
   "license": "MIT",
   "scripts": {
     "dev": "cross-env NODE_ENV=development VITE_SOURCEMAP=inline vite build --watch",

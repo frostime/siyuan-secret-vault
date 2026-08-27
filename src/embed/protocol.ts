@@ -1,67 +1,85 @@
-import type { SecretViewState, VaultInvalidation } from "../types";
+import type { SecretViewState } from "../types";
 
 export const PROTOCOL_NS = "siyuan-secret-vault";
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
-interface RequestBase {
+/** One-time same-origin handshake sent only after the user opens a live embed. */
+export interface SessionConnectMessage {
   ns: typeof PROTOCOL_NS;
   v: typeof PROTOCOL_VERSION;
-  requestId: string;
+  type: "session:connect";
+  sessionId: string;
   secretId: string;
 }
 
-export type EmbedRequest =
-  | (RequestBase & { type: "secret:get-state" })
-  | (RequestBase & { type: "secret:reveal" })
-  | (RequestBase & { type: "secret:copy" })
-  | (RequestBase & { type: "secret:lock-group" })
-  | (RequestBase & {
+export interface SessionConnectedMessage {
+  type: "session:connected";
+  sessionId: string;
+  ok: boolean;
+  state?: SecretViewState;
+  error?: string;
+}
+
+interface SessionRequestBase {
+  type:
+    | "secret:get-state"
+    | "secret:reveal"
+    | "secret:copy"
+    | "secret:lock-group"
+    | "secret:update";
+  requestId: string;
+}
+
+export type SessionRequest =
+  | (SessionRequestBase & { type: "secret:get-state" })
+  | (SessionRequestBase & { type: "secret:reveal" })
+  | (SessionRequestBase & { type: "secret:copy" })
+  | (SessionRequestBase & { type: "secret:lock-group" })
+  | (SessionRequestBase & {
       type: "secret:update";
       data: { label: string; content: string };
     });
 
-export interface EmbedResponse {
-  ns: typeof PROTOCOL_NS;
-  v: typeof PROTOCOL_VERSION;
-  requestId: string;
+export interface SessionResponse {
   type: "response";
+  requestId: string;
   ok: boolean;
-  data?: SecretViewState | { content: string };
+  state?: SecretViewState;
   error?: string;
 }
 
-export interface EmbedInvalidationMessage {
-  ns: typeof PROTOCOL_NS;
-  v: typeof PROTOCOL_VERSION;
-  type: "invalidate";
-  invalidation: VaultInvalidation;
+export interface SessionRevokedMessage {
+  type: "session:revoked";
+  reason: string;
 }
 
-export interface EmbedHostLifecycleMessage {
-  ns: typeof PROTOCOL_NS;
-  v: typeof PROTOCOL_VERSION;
-  type: "host:ready" | "host:stopping";
+export interface SessionDisconnectMessage {
+  type: "session:disconnect";
 }
 
-export interface EmbedResizeMessage {
-  ns: typeof PROTOCOL_NS;
-  v: typeof PROTOCOL_VERSION;
-  type: "embed:resize";
-  secretId: string;
-  height: number;
-}
+export type SessionPortMessage =
+  | SessionConnectedMessage
+  | SessionRequest
+  | SessionResponse
+  | SessionRevokedMessage
+  | SessionDisconnectMessage;
 
-export function isEmbedRequest(value: unknown): value is EmbedRequest {
+export function isSessionConnectMessage(value: unknown): value is SessionConnectMessage {
   if (!value || typeof value !== "object") return false;
   const message = value as Record<string, unknown>;
 
-  if (
-    message.ns !== PROTOCOL_NS
-    || message.v !== PROTOCOL_VERSION
-    || typeof message.requestId !== "string"
-    || typeof message.secretId !== "string"
-    || typeof message.type !== "string"
-  ) {
+  return message.ns === PROTOCOL_NS
+    && message.v === PROTOCOL_VERSION
+    && message.type === "session:connect"
+    && typeof message.sessionId === "string"
+    && typeof message.secretId === "string";
+}
+
+export function isSessionRequest(value: unknown): value is SessionRequest {
+  if (!value || typeof value !== "object") return false;
+  const message = value as Record<string, unknown>;
+
+  if (typeof message.requestId !== "string" || typeof message.type !== "string") {
     return false;
   }
 
@@ -83,14 +101,10 @@ export function isEmbedRequest(value: unknown): value is EmbedRequest {
   }
 }
 
-export function isEmbedResizeMessage(value: unknown): value is EmbedResizeMessage {
-  if (!value || typeof value !== "object") return false;
-  const message = value as Record<string, unknown>;
-
-  return message.ns === PROTOCOL_NS
-    && message.v === PROTOCOL_VERSION
-    && message.type === "embed:resize"
-    && typeof message.secretId === "string"
-    && typeof message.height === "number"
-    && Number.isFinite(message.height);
+export function isSessionDisconnectMessage(value: unknown): value is SessionDisconnectMessage {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && (value as Record<string, unknown>).type === "session:disconnect",
+  );
 }

@@ -1,5 +1,5 @@
 import { showMessage, type Protyle } from "siyuan";
-import type { GroupId, SecretId } from "../types";
+import type { SecretRecord } from "../types";
 import {
   deleteBlock,
   getBlockAttrs,
@@ -9,31 +9,28 @@ import {
   type BlockInsertionTarget,
 } from "./siyuan-api";
 
-const INITIAL_EMBED_HEIGHT = 54;
-const MIN_EMBED_HEIGHT = 42;
-const MAX_EMBED_HEIGHT = 420;
-const HEIGHT_WRITE_EPSILON = 4;
+const REFERENCE_VERSION = "2";
+const DEFAULT_EMBED_HEIGHT = 178;
 
-interface ResizeState {
-  pendingHeight: number | null;
-  running: Promise<void> | null;
-}
-
-export interface SecretReferenceDescriptor {
-  id: SecretId;
-  groupId: GroupId;
-  label: string;
-}
+export type SecretReferenceSource = Pick<
+  SecretRecord,
+  "id" | "groupId" | "label" | "createdAt" | "updatedAt"
+>;
 
 export interface SlashTarget {
   insertion: BlockInsertionTarget;
   cleanupBlockId: string | null;
 }
 
-/** Owns the SiYuan block format used to reference one vault secret. */
+/**
+ * Owns the persistent SiYuan representation of a Secret reference.
+ *
+ * Version 2 references are dormant document-owned snapshots. Their srcdoc has
+ * no script and does not contact the plugin. The only active transition is the
+ * user's explicit link navigation to live.html. Secret ID remains authoritative;
+ * all other custom attributes are non-authoritative display metadata.
+ */
 export class SecretReferenceService {
-  private readonly resizeStateByBlock = new Map<string, ResizeState>();
-
   constructor(private readonly pluginName: string) {}
 
   captureSlashTarget(protyle: Protyle, nodeElement: HTMLElement): SlashTarget {
@@ -57,65 +54,27 @@ export class SecretReferenceService {
     };
   }
 
-  async insertAtCaret(secret: SecretReferenceDescriptor, protyle: Protyle): Promise<void> {
-    await this.insert(secret, this.resolveEditorInsertionTarget(protyle), null);
+  async insertAtCaret(
+    secret: SecretReferenceSource,
+    groupName: string,
+    protyle: Protyle,
+  ): Promise<void> {
+    await this.insert(secret, groupName, this.resolveEditorInsertionTarget(protyle), null);
   }
 
   async insertFromSlash(
-    secret: SecretReferenceDescriptor,
+    secret: SecretReferenceSource,
+    groupName: string,
     slashTarget: SlashTarget,
   ): Promise<void> {
-    await this.insert(secret, slashTarget.insertion, slashTarget.cleanupBlockId);
+    await this.insert(secret, groupName, slashTarget.insertion, slashTarget.cleanupBlockId);
   }
 
-  /**
-   * Persists an interaction-driven embed height through SiYuan's block
-   * attribute API. The plugin never mutates Protyle's NodeIFrame DOM directly.
-   *
-   * Requests for the same block are coalesced and serialized so quick
-   * edit/cancel interactions cannot finish out of order.
-   */
-  resizeEmbedBlock(blockId: string, requestedHeight: number): Promise<void> {
-    const height = clampEmbedHeight(requestedHeight);
-    let state = this.resizeStateByBlock.get(blockId);
-
-    if (!state) {
-      state = { pendingHeight: null, running: null };
-      this.resizeStateByBlock.set(blockId, state);
-    }
-
-    state.pendingHeight = height;
-    if (!state.running) {
-      state.running = this.flushResizeRequests(blockId, state).finally(() => {
-        state!.running = null;
-        if (state!.pendingHeight === null) this.resizeStateByBlock.delete(blockId);
-      });
-    }
-
-    return state.running;
-  }
-
-  private async flushResizeRequests(blockId: string, state: ResizeState): Promise<void> {
-    while (state.pendingHeight !== null) {
-      const height = state.pendingHeight;
-      state.pendingHeight = null;
-      await this.persistEmbedHeight(blockId, height);
-    }
-  }
-
-  private async persistEmbedHeight(blockId: string, height: number): Promise<void> {
+  /** Validates the authoritative reference identity during an explicit session handshake. */
+  async matchesReference(blockId: string, secretId: string): Promise<boolean> {
     const attrs = await getBlockAttrs(blockId);
-    if (attrs["custom-secret-vault"] !== "1") return;
-
-    const currentStyle = attrs.style ?? "";
-    const currentHeight = readPixelHeight(currentStyle);
-    if (currentHeight !== null && Math.abs(currentHeight - height) < HEIGHT_WRITE_EPSILON) {
-      return;
-    }
-
-    await setBlockAttrs(blockId, {
-      style: mergeStyleHeight(currentStyle, height),
-    });
+    return attrs["custom-secret-vault"] === "1"
+      && attrs["custom-secret-id"] === secretId;
   }
 
   private resolveEditorInsertionTarget(protyle: Protyle): BlockInsertionTarget {
@@ -132,17 +91,24 @@ export class SecretReferenceService {
   }
 
   private async insert(
-    secret: SecretReferenceDescriptor,
+    secret: SecretReferenceSource,
+    groupName: string,
     target: BlockInsertionTarget,
     cleanupBlockId: string | null,
   ): Promise<void> {
-    const src = `/plugins/${this.pluginName}/embed/index.html?secret=${encodeURIComponent(secret.id)}`;
-    const iframe = `<iframe src="${src}" style="width: 100%; height: ${INITIAL_EMBED_HEIGHT}px; border: 0; border-radius: 6px;"></iframe>`;
+    const liveHref = `/plugins/${this.pluginName}/embed/live.html?secret=${encodeURIComponent(secret.id)}`;
+    const srcdoc = buildDormantSrcdoc(secret.label, groupName, liveHref);
+    const iframe = [
+      '<iframe loading="lazy"',
+      ` srcdoc="${escapeHtmlAttribute(srcdoc)}"`,
+      ` style="width: 100%; height: 100%; border: 0; border-radius: 6px;"`,
+      "></iframe>",
+    ].join("");
 
     const inserted = await insertMarkdownBlock(iframe, target);
 
-    // Standalone <iframe> must become a real NodeIFrame. If a future Lute
-    // version changes this parse rule, fail closed instead of leaving garbage.
+    // Standalone <iframe> must become a real NodeIFrame. Fail closed if a
+    // future Lute version changes this parse rule.
     if (inserted.dom && !inserted.dom.includes('data-type="NodeIFrame"')) {
       await deleteBlock(inserted.id).catch(() => undefined);
       throw new Error("思源没有把嵌入内容解析为 IFrame 块；已回滚此次插入");
@@ -154,8 +120,12 @@ export class SecretReferenceService {
         "custom-secret-vault": "1",
         "custom-secret-id": secret.id,
         "custom-secret-group": secret.groupId,
-        "custom-secret-version": "1",
-        style: mergeStyleHeight(attrs.style ?? "", INITIAL_EMBED_HEIGHT),
+        "custom-secret-label": secret.label,
+        "custom-secret-group-name": groupName,
+        "custom-secret-created-at": String(secret.createdAt),
+        "custom-secret-updated-at": String(secret.updatedAt),
+        "custom-secret-version": REFERENCE_VERSION,
+        style: mergeInitialHeight(attrs.style ?? "", DEFAULT_EMBED_HEIGHT),
       });
     } catch (error) {
       await deleteBlock(inserted.id).catch(() => undefined);
@@ -171,8 +141,8 @@ export class SecretReferenceService {
       const kramdown = await getBlockKramdown(blockId);
       const source = normalizeEditorText(kramdown.replace(/\n?\{:[\s\S]*$/, ""));
 
-      // The dialog is asynchronous. Re-check the persisted block before
-      // deleting it so a block changed after the slash command is never lost.
+      // The dialog is asynchronous. Re-check persisted content before deleting
+      // the slash source so user edits made while the dialog was open survive.
       if (isSlashOnlyText(source)) {
         await deleteBlock(blockId);
       }
@@ -180,6 +150,14 @@ export class SecretReferenceService {
       console.warn("[secret-vault] failed to clean slash source block", blockId, error);
     }
   }
+}
+
+function buildDormantSrcdoc(label: string, groupName: string, liveHref: string): string {
+  const safeLabel = escapeHtmlText(label || "Secret");
+  const safeGroup = escapeHtmlText(groupName || "Secret Vault");
+  const safeHref = escapeHtmlAttribute(liveHref);
+
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}html,body{margin:0;min-height:100%;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:CanvasText;background:transparent}body{padding:8px}.card{min-height:148px;padding:14px 16px;border:1px solid color-mix(in srgb,currentColor 12%,transparent);border-radius:8px;background:color-mix(in srgb,Canvas 98%,currentColor 2%);display:flex;align-items:center;justify-content:space-between;gap:16px}.identity{min-width:0}.label{display:block;font-size:14px;font-weight:650;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta{display:block;margin-top:4px;font-size:11px;opacity:.58}.connect{flex:0 0 auto;padding:5px 10px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:6px;color:inherit;text-decoration:none;font-size:12px}.connect:hover{background:color-mix(in srgb,currentColor 7%,transparent)}</style></head><body><main class="card"><div class="identity"><strong class="label">🔐 ${safeLabel}</strong><span class="meta">${safeGroup} · 静态引用</span></div><a class="connect" href="${safeHref}">连接</a></main></body></html>`;
 }
 
 function normalizeEditorText(value: string): string {
@@ -190,26 +168,25 @@ function isSlashOnlyText(value: string): boolean {
   return /^\/\S*$/.test(value);
 }
 
-function clampEmbedHeight(value: number): number {
-  return Math.round(Math.max(MIN_EMBED_HEIGHT, Math.min(MAX_EMBED_HEIGHT, value)));
+function escapeHtmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
-function readPixelHeight(style: string): number | null {
-  const match = style.match(/(?:^|;)\s*height\s*:\s*(-?\d+(?:\.\d+)?)px(?:\s*!important)?\s*(?=;|$)/i);
-  if (!match) return null;
-
-  const value = Number.parseFloat(match[1]);
-  return Number.isFinite(value) ? value : null;
+function escapeHtmlAttribute(value: string): string {
+  return escapeHtmlText(value).replaceAll('"', "&quot;");
 }
 
-function mergeStyleHeight(style: string, height: number): string {
+function mergeInitialHeight(style: string, height: number): string {
   const declaration = `height: ${height}px`;
   const heightPattern = /(^|;)\s*height\s*:[^;]*/gi;
 
   if (heightPattern.test(style)) {
     heightPattern.lastIndex = 0;
     let replaced = false;
-    const merged = style.replace(heightPattern, (match, separator: string) => {
+    const merged = style.replace(heightPattern, (_match, separator: string) => {
       if (replaced) return separator;
       replaced = true;
       return `${separator}${separator ? " " : ""}${declaration}`;

@@ -11,13 +11,13 @@ import {
 import { VaultMutationCoordinator } from "./mutation-coordinator";
 import type {
   AccessContextId,
+  AuthorizationRevocation,
   GroupId,
   SecretGroup,
   SecretId,
   SecretRecord,
   SecretViewState,
   VaultData,
-  VaultInvalidation,
   VaultSnapshot,
 } from "./types";
 import { VAULT_CONTEXT_ID } from "./types";
@@ -27,7 +27,7 @@ const DEFAULT_GROUP_ID = "default";
 const AUTO_LOCK_IDLE_MS = 15 * 60 * 1000;
 
 type SnapshotListener = (snapshot: VaultSnapshot) => void;
-type InvalidationListener = (invalidation: VaultInvalidation) => void;
+type RevocationListener = (revocation: AuthorizationRevocation) => void;
 
 interface SnapshotSubscription {
   contextId: AccessContextId;
@@ -84,12 +84,20 @@ export class VaultController {
   private readonly mutations = new VaultMutationCoordinator();
   private revision = 0;
   private readonly snapshotSubscriptions = new Set<SnapshotSubscription>();
-  private readonly invalidationListeners = new Set<InvalidationListener>();
+  private readonly revocationListeners = new Set<RevocationListener>();
 
   constructor(private readonly plugin: Plugin) {
     this.access = new GroupAccessManager(
       AUTO_LOCK_IDLE_MS,
-      (contextId, groupId) => this.publish({ scope: "context-group", contextId, groupId }),
+      (contextId, groupId) => {
+        this.publishSnapshots();
+        this.revoke({
+          scope: "context-group",
+          contextId,
+          groupId,
+          reason: "idle-timeout",
+        });
+      },
     );
     this.access.activateContext(VAULT_CONTEXT_ID);
   }
@@ -104,7 +112,7 @@ export class VaultController {
       // into a competing local writer.
       if (!loaded) {
         this.data = emptyVault();
-        this.publish({ scope: "all" });
+        this.publishSnapshots();
         return;
       }
 
@@ -113,7 +121,7 @@ export class VaultController {
       }
 
       this.data = loaded;
-      this.publish({ scope: "all" });
+      this.publishSnapshots();
     });
   }
 
@@ -128,7 +136,8 @@ export class VaultController {
 
       this.data = next;
       this.access.clearAll();
-      this.publish({ scope: "all" });
+      this.publishSnapshots();
+      this.revoke({ scope: "all", reason: "vault-reloaded" });
     });
   }
 
@@ -136,7 +145,7 @@ export class VaultController {
     this.mutations.close();
     this.access.dispose();
     this.snapshotSubscriptions.clear();
-    this.invalidationListeners.clear();
+    this.revocationListeners.clear();
   }
 
   activateContext(contextId: AccessContextId): void {
@@ -150,9 +159,9 @@ export class VaultController {
     return () => this.snapshotSubscriptions.delete(subscription);
   }
 
-  subscribeInvalidations(listener: InvalidationListener): () => void {
-    this.invalidationListeners.add(listener);
-    return () => this.invalidationListeners.delete(listener);
+  subscribeRevocations(listener: RevocationListener): () => void {
+    this.revocationListeners.add(listener);
+    return () => this.revocationListeners.delete(listener);
   }
 
   getSnapshot(contextId: AccessContextId): VaultSnapshot {
@@ -238,7 +247,7 @@ export class VaultController {
       await this.persistAndCommit(next);
 
       this.access.authorize(contextId, group.id, key);
-      this.publish();
+      this.publishSnapshots();
       return group.id;
     });
   }
@@ -274,7 +283,7 @@ export class VaultController {
       }
 
       if (!this.access.authorize(contextId, groupId, key)) {
-        if (initializedNow) this.publish();
+        if (initializedNow) this.publishSnapshots();
         throw new Error(
           initializedNow
             ? "当前文档已经关闭；分组口令已初始化，但未保留解锁状态"
@@ -282,22 +291,30 @@ export class VaultController {
         );
       }
 
-      this.publish({ scope: "context-group", contextId, groupId });
+      this.publishSnapshots();
     });
   }
 
   lockGroup(contextId: AccessContextId, groupId: GroupId): void {
     if (!this.access.lock(contextId, groupId)) return;
-    this.publish({ scope: "context-group", contextId, groupId });
+    this.publishSnapshots();
+    this.revoke({
+      scope: "context-group",
+      contextId,
+      groupId,
+      reason: "locked",
+    });
   }
 
   releaseContext(contextId: AccessContextId): void {
-    this.access.releaseContext(contextId);
+    const releasedGroups = this.access.releaseContext(contextId);
+    if (releasedGroups.length > 0) this.publishSnapshots();
+    this.revoke({ scope: "context", contextId, reason: "context-closed" });
   }
 
   lockAll(): void {
-    if (!this.access.clearAll()) return;
-    this.publish({ scope: "all" });
+    if (this.access.clearAll()) this.publishSnapshots();
+    this.revoke({ scope: "all", reason: "lock-all" });
   }
 
   async changeGroupPassword(
@@ -346,7 +363,8 @@ export class VaultController {
       // Always revoke old-password grants. If the initiating context vanished
       // while saveData was in flight, the new key is simply not cached.
       this.access.replaceKeyKeepingContext(groupId, contextId, newKey);
-      this.publish({ scope: "group", groupId });
+      this.publishSnapshots();
+      this.revoke({ scope: "group", groupId, reason: "password-changed" });
     });
   }
 
@@ -366,7 +384,8 @@ export class VaultController {
       await this.persistAndCommit(next);
 
       this.access.lockGroupEverywhere(groupId);
-      this.publish();
+      this.publishSnapshots();
+      this.revoke({ scope: "group", groupId, reason: "group-deleted" });
     });
   }
 
@@ -399,7 +418,7 @@ export class VaultController {
       next.secrets.push(record);
       await this.persistAndCommit(next);
 
-      this.publish();
+      this.publishSnapshots();
       return secretId;
     });
   }
@@ -411,14 +430,16 @@ export class VaultController {
     const secret = this.requireSecret(secretId);
     const group = this.requireGroup(secret.groupId);
     const key = this.access.peekAuthorizedKey(contextId, group.id);
+    if (key) this.access.touch(contextId, group.id);
 
     return {
-      contextId,
       secretId: secret.id,
       label: secret.label,
       groupId: group.id,
       groupName: group.name,
       locked: !key,
+      createdAt: secret.createdAt,
+      updatedAt: secret.updatedAt,
       content: key
         ? await decryptSecretContent(key, group.id, secret.id, secret.encryptedContent)
         : undefined,
@@ -456,7 +477,7 @@ export class VaultController {
 
       this.access.getAuthorizedKey(contextId, secret.groupId, { touch: false });
       await this.persistAndCommit(next);
-      this.publish({ scope: "secret", secretId });
+      this.publishSnapshots();
     });
   }
 
@@ -470,7 +491,8 @@ export class VaultController {
       next.secrets.splice(index, 1);
       await this.persistAndCommit(next);
 
-      this.publish({ scope: "secret", secretId });
+      this.publishSnapshots();
+      this.revoke({ scope: "secret", secretId, reason: "secret-deleted" });
     });
   }
 
@@ -516,16 +538,16 @@ export class VaultController {
     await this.plugin.saveData(STORAGE_FILE, cloneVault(data));
   }
 
-  private publish(invalidation?: VaultInvalidation): void {
+  private publishSnapshots(): void {
     this.revision += 1;
-
     for (const subscription of this.snapshotSubscriptions) {
       subscription.listener(this.getSnapshot(subscription.contextId));
     }
+  }
 
-    if (!invalidation) return;
-    for (const listener of this.invalidationListeners) {
-      listener(invalidation);
+  private revoke(revocation: AuthorizationRevocation): void {
+    for (const listener of this.revocationListeners) {
+      listener(revocation);
     }
   }
 }

@@ -6,8 +6,9 @@ import {
   type Protyle,
 } from "siyuan";
 import { mount, unmount } from "svelte";
-import { EmbedBroker } from "./embed/broker";
+import { EmbedSessionBroker } from "./embed/broker";
 import { ProtyleContextRegistry } from "./editor/protyle-context";
+// import { SecretBlockHeightController } from "./editor/secret-block-height";
 import { SecretDialogs } from "./editor/secret-dialogs";
 import { SecretReferenceService } from "./editor/secret-reference";
 import { VAULT_CONTEXT_ID } from "./types";
@@ -26,14 +27,13 @@ export default class SecretVaultPlugin extends Plugin {
   private contexts!: ProtyleContextRegistry;
   private references!: SecretReferenceService;
   private dialogs!: SecretDialogs;
-  private broker: EmbedBroker | null = null;
-  private unsubscribeInvalidations: (() => void) | null = null;
+  private broker: EmbedSessionBroker | null = null;
 
   async onload(): Promise<void> {
     this.addSecretVaultIcon();
 
     this.vault = new VaultController(this);
-    this.contexts = new ProtyleContextRegistry(this.name);
+    this.contexts = new ProtyleContextRegistry();
     this.references = new SecretReferenceService(this.name);
     this.dialogs = new SecretDialogs(this.vault, this.references, this.contexts);
 
@@ -43,52 +43,38 @@ export default class SecretVaultPlugin extends Plugin {
     this.registerEditorEvents();
     this.registerSlashCommands();
 
-    // Start the broker before awaiting plugin data. SiYuan may restore a
-    // document iframe while loadData() is still in flight; the broker keeps
-    // that first request alive behind this readiness promise instead of losing
-    // the postMessage entirely.
+    // Install the handshake listener before awaiting plugin data. Dormant
+    // references still do nothing until the user clicks Connect; this only
+    // prevents that explicit click from being lost during a slow startup.
     const vaultReady = this.vault.initialize();
 
-    this.broker = new EmbedBroker(this.vault, {
-      resolveContext: (source) => {
-        const contextId = this.contexts.resolveEmbed(source)?.contextId ?? null;
-        if (!contextId) return null;
+    this.broker = new EmbedSessionBroker(this.vault, {
+      resolveSessionSource: async (source, secretId) => {
+        const resolved = this.contexts.resolveEmbed(source);
+        if (!resolved) return null;
+        if (!(await this.references.matchesReference(resolved.blockId, secretId))) return null;
 
         try {
-          this.vault.activateContext(contextId);
-          return contextId;
+          this.vault.activateContext(resolved.contextId);
+          return { contextId: resolved.contextId, blockId: resolved.blockId };
         } catch {
-          // A late message from a just-destroyed Protyle must not reactivate
-          // the released access context.
+          // A late explicit connect from a Protyle already torn down must not
+          // resurrect its released access context.
           return null;
         }
       },
       requestUnlock: (contextId, groupId) => this.dialogs.requestUnlock(contextId, groupId),
-      resizeEmbed: async (source, height) => {
-        const resolved = this.contexts.resolveEmbed(source);
-        if (!resolved) return;
-
-        try {
-          // Do not persist a late resize for a Protyle whose access context was
-          // already released during teardown.
-          this.vault.activateContext(resolved.contextId);
-        } catch {
-          return;
-        }
-
-        await this.references.resizeEmbedBlock(resolved.blockId, height);
-      },
     }, vaultReady);
     this.broker.start();
-    this.unsubscribeInvalidations = this.vault.subscribeInvalidations(
-      (invalidation) => this.broker?.invalidate(invalidation),
-    );
+
+    // Optional kernel-owned height capability is implemented and type-checked
+    // in editor/secret-block-height.ts, but intentionally disconnected in 0.4.0.
+    // const blockHeights = new SecretBlockHeightController();
+    // (No live-session presentation edge is wired to blockHeights yet.)
 
     try {
       await vaultReady;
     } catch (error) {
-      this.unsubscribeInvalidations?.();
-      this.unsubscribeInvalidations = null;
       this.broker.dispose();
       this.broker = null;
       throw error;
@@ -107,11 +93,9 @@ export default class SecretVaultPlugin extends Plugin {
 
   onunload(): void {
     this.unregisterEditorEvents();
-    this.unsubscribeInvalidations?.();
-    this.unsubscribeInvalidations = null;
 
-    // Broker disposal broadcasts host:stopping first so any surviving document
-    // iframes are promptly instructed to drop rendered plaintext as the host exits.
+    // Broker disposal revokes only sessions that were explicitly connected.
+    // Dormant document references are inert and are not contacted at all.
     this.broker?.dispose();
     this.broker = null;
     this.vault?.dispose();
@@ -126,7 +110,7 @@ export default class SecretVaultPlugin extends Plugin {
 
   async onDataChanged(): Promise<void> {
     await this.vault.reloadFromStorage();
-    showMessage("秘密库同步数据已更新；所有窗口的分组授权已清除");
+    showMessage("秘密库同步数据已更新；运行中的 Secret 会话已断开，分组授权已清除");
   }
 
   private addSecretVaultIcon(): void {
@@ -260,7 +244,9 @@ export default class SecretVaultPlugin extends Plugin {
 
     const secret = this.vault.getSecret(secretId);
     if (!secret) throw new Error("秘密不存在");
+    const group = this.vault.getGroup(secret.groupId);
+    if (!group) throw new Error("秘密所属分组不存在");
 
-    await this.references.insertAtCaret(secret, protyle);
+    await this.references.insertAtCaret(secret, group.name, protyle);
   }
 }

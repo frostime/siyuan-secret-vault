@@ -1,77 +1,254 @@
-# Secret Vault architecture
+# Secret Vault Architecture — 0.4.x
 
-## Security and access model
+## Decision pressure
 
-A group password is never persisted. Persisted data contains the PBKDF2 parameters,
-verifier ciphertext, plaintext labels, and AES-GCM encrypted content.
+The 0.4 architecture is optimized for one failure mode above all others: a Secret reference inside a SiYuan document must not become an always-on remote projection controlled by a process-wide Vault UI.
 
-Unlocking is scoped to an **access context**:
+The 0.3 design made every NodeIFrame an active replica of Vault state. Vault mutations produced invalidations, invalidations were broadcast to every iframe, frames refreshed themselves, and presentation changes could feed back into SiYuan's NodeIFrame lifecycle. That design had three complexity symptoms:
 
-- `vault` — the built-in Secret Vault tab.
-- `protyle:<uuid>` — one live Protyle editor instance.
+- **Change amplification** — a Vault state change crossed VaultController, invalidation types, the broker, BroadcastChannel, iframe filtering, refresh, and presentation logic.
+- **Cognitive load** — understanding one document block required understanding global Vault state, Protyle identity, broadcast fan-out, plugin lifecycle, iframe lifecycle, and resize behavior at once.
+- **Unknown unknowns** — opening a document could trigger plugin work even when the user did nothing, making it difficult to reconstruct why an iframe refreshed or why SiYuan rerendered it.
 
-A group key may be cached once in plugin memory, but a context may use it only after
-that context has independently authenticated. Therefore:
+The core ownership rule is therefore:
 
-- unlocking the Secret Vault does not unlock any document;
-- unlocking document A does not unlock document B;
-- all Secret frames inside the same Protyle share that Protyle's authorization;
-- destroying a Protyle releases all of that Protyle's authorizations;
-- a released Protyle context is terminal and can never be authorized again;
-- when no context remains authorized for a group, the cached `CryptoKey` reference is released;
-- each context/group authorization has an independent 15-minute inactivity timer;
-- changing a group password keeps the initiating context authorized only if it is still authorized when the save commits, and revokes every other context.
+> **Document blocks are clients, not replicas of Vault state.**
+>
+> A Secret reference owns its presentation and decides when to connect. The Vault owns encrypted data, cryptography, authorization, and key lifetime. The Vault never pushes ordinary data changes into document references; it may only revoke a capability that it previously granted.
 
-## Persistent-state consistency
+## Alternatives considered
 
-`vault.json` has one logical writer. `VaultMutationCoordinator` serializes the **whole
-mutation lifecycle**, not merely calls to `saveData`:
+Two decomposition axes were credible.
 
-1. observe and validate the last committed vault state;
-2. clone it into a detached staged state;
-3. perform any asynchronous crypto against that staged state;
-4. re-check runtime authorization when an operation may have outlived its context;
-5. persist the complete staged snapshot;
-6. replace the in-memory committed state only after persistence succeeds;
-7. update related runtime authorization and publish invalidation before the queue advances.
+### A. Keep the realtime projection and add a lazy gate
 
-Consequences:
+The existing `Vault -> invalidation -> BroadcastChannel -> iframe refresh` graph could remain, with a boolean that delays activation until the iframe becomes visible or is clicked.
 
-- password rotation cannot interleave with Secret encryption using an old key;
-- two contexts cannot initialize an uninitialized group with competing passwords;
-- a failed persistence never requires a partial in-memory rollback and cannot leak into a later queued snapshot;
-- readers always see the last successfully persisted `VaultData`, never a half-committed KDF/ciphertext transition.
+This is a small diff, but it preserves the leaked design knowledge: Vault still knows that document UI should refresh, every iframe still participates in global fan-out after activation, and the debug story still crosses the same modules. It reduces startup work without fixing ownership.
 
-The queue is intentionally global rather than per-group because all groups share one
-persisted `vault.json` snapshot. Write throughput is not a design goal for this plugin;
-simple ordering and recoverable state are.
+### B. Separate dormant references from explicit live sessions
 
-## Module ownership
+The document owns an inert persisted reference. Only an explicit user action creates a temporary live client session. Each live session gets its own `MessagePort`. Ordinary Vault changes do not propagate to document blocks; capability revocation is a separate semantic channel.
 
-- `src/vault.ts` — committed vault data, crypto orchestration, context-aware vault operations.
-- `src/mutation-coordinator.ts` — single-writer ordering for complete persistent mutation lifecycles.
-- `src/access.ts` — runtime keys, active/released context lifecycle, authorization, inactivity timers, key lifetime.
-- `src/crypto.ts` — PBKDF2 and AES-GCM primitives only.
-- `src/embed/` — iframe protocol and broker; no Protyle lifecycle ownership.
-- `src/editor/protyle-context.ts` — Protyle identity, iframe-to-Protyle resolution, session-local lazy resize.
-- `src/editor/secret-reference.ts` — NodeIFrame insertion format, block attributes, slash-source cleanup.
-- `src/editor/secret-dialogs.ts` — imperative SiYuan dialogs and unlock single-flight coordination.
-- `src/ui/VaultApp.svelte` — built-in Vault UI bound to the `vault` access context.
-- `src/index.ts` — composition root and SiYuan lifecycle registration.
+This is a larger refactor, but it removes the dominant non-local control flow and gives each design decision one owner. 0.4 uses this model.
 
-## Embed invalidation and resize
+## State ownership
 
-Embed invalidation is deliberately scoped:
+### `VaultController`
 
-- `secret` — all references to one changed Secret;
-- `context-group` — one group in one Protyle, used for normal lock/unlock/idle-lock;
-- `group` — all contexts for a rare group-wide change such as password rotation;
-- `all` — storage reload/synchronization.
+Owns:
 
-Iframe height synchronization is intentionally **lazy**. Initial iframe loading and
-background invalidation never resize Protyle blocks. Only explicit interaction inside
-that iframe (unlock, edit, cancel, save, lock, retry, or an interaction-generated error)
-may request a resize. The parent updates the live `NodeIFrame` and inner `<iframe>`
-inline heights only; it does not persist resize state through kernel transactions.
+- the last successfully persisted `VaultData`;
+- crypto orchestration over that committed data;
+- mutation serialization through `VaultMutationCoordinator`;
+- snapshot publication for the built-in Vault UI;
+- facts that an existing authorization capability has become invalid.
 
-There is no `setInterval`, `MutationObserver`, `ResizeObserver`, or recursive animation loop.
+It does **not** own document rendering, iframe refresh, reconnect, or block presentation.
+
+### `GroupAccessManager`
+
+Owns:
+
+- runtime-only `CryptoKey` references;
+- context authorization;
+- the 15-minute inactivity timer;
+- context terminal lifecycle (a released context cannot be reactivated).
+
+### `SecretReferenceService`
+
+Owns the persistent SiYuan representation of one document reference.
+
+New references use `custom-secret-version=2` and persist:
+
+- `custom-secret-vault=1`;
+- `custom-secret-id` — authoritative identity;
+- `custom-secret-group`;
+- `custom-secret-label` — display snapshot;
+- `custom-secret-group-name` — display snapshot;
+- `custom-secret-created-at` — display snapshot;
+- `custom-secret-updated-at` — display snapshot.
+
+Only `custom-secret-id` is authoritative. Snapshot metadata is intentionally allowed to become stale. Renaming a Secret in the Vault does not scan or rewrite documents.
+
+The iframe `srcdoc` is also a snapshot owned by this module. It contains static HTML/CSS and an explicit `连接` link. It contains no script and performs no parent communication.
+
+### `ProtyleContextRegistry`
+
+Owns only:
+
+- `Protyle -> AccessContextId` identity;
+- Protyle lifecycle;
+- one-time mapping from an explicitly connecting child `Window` to the containing NodeIFrame block and Protyle context.
+
+It deliberately knows nothing about Secret Vault URL paths or protocol messages.
+
+### `EmbedSessionBroker`
+
+Owns temporary live iframe sessions.
+
+One live session contains:
+
+- session ID;
+- Secret ID and Group ID;
+- AccessContext ID;
+- source block ID;
+- source `Window`;
+- one dedicated `MessagePort`;
+- per-session request ordering.
+
+The broker performs no iframe discovery, polling, BroadcastChannel fan-out, host-ready announcement, automatic refresh, or reconnect.
+
+### `live.js`
+
+Owns presentation state inside one explicitly connected iframe. It may request operations over its dedicated port only because the user first chose to connect that reference.
+
+If a session is revoked it immediately deletes plaintext from the DOM, clears edit buffers, closes the port, and becomes disconnected. It never reconnects automatically.
+
+## Dormant -> live control flow
+
+### New v2 reference
+
+```text
+SiYuan opens document
+    -> NodeIFrame srcdoc renders static snapshot
+    -> no plugin request
+    -> no Vault read
+    -> no timer
+    -> no BroadcastChannel
+
+user clicks 连接
+    -> iframe navigates itself to live.html?secret=<id>
+    -> live page creates MessageChannel
+    -> one window.postMessage(session:connect, transferred port)
+    -> parent validates block attributes + Protyle context
+    -> parent returns current state on the dedicated port
+    -> explicit user operations continue on that port
+```
+
+The initial live connection is itself user-triggered. Loading the document is not a connection event.
+
+### Legacy v1 reference
+
+Existing v1 documents are not bulk migrated.
+
+`public/embed/index.html` is now a dormant compatibility shell. Its only script reads the existing `?secret=` query value and copies it into the local `连接` link. It never contacts the parent plugin.
+
+This means installing 0.4 immediately removes automatic Vault traffic from existing v1 references without rewriting `.sy` documents.
+
+Newly inserted references naturally use v2.
+
+## Explicit operations
+
+A connected iframe may explicitly request:
+
+- `secret:get-state` — only from the user's Refresh action;
+- `secret:reveal` — Unlock;
+- `secret:copy` — Copy;
+- `secret:update` — Save;
+- `secret:lock-group` — Lock.
+
+Normal `createSecret`, `updateSecret`, group rename, Vault-tab selection, plugin readiness, and snapshot publication do not push anything into document references.
+
+Two live references to the same Secret are independent clients. Updating one does not automatically refresh the other.
+
+## Capability revocation
+
+Capability revocation is deliberately not called “invalidation”. It does not mean “please refresh”. It means “this live session may no longer retain or use the capability it was relying on”.
+
+`VaultController` may publish revocation facts for:
+
+- inactivity timeout;
+- explicit group lock;
+- lock-all;
+- Protyle/context destruction;
+- official-sync reload of `vault.json`;
+- group password change;
+- group deletion;
+- Secret deletion.
+
+`EmbedSessionBroker` matches only existing live sessions and sends `session:revoked`. The child then wipes plaintext and disconnects. It does not pull new data or reconnect.
+
+Plugin unload is broker-owned and similarly revokes all currently live sessions with `plugin-stopping`. Dormant references are untouched.
+
+## Sync behavior
+
+`vault.json` remains in SiYuan's plugin data storage through `Plugin.saveData/loadData`.
+
+`onDataChanged()` reloads committed Vault data, clears runtime grants, and revokes current live sessions. Dormant references do not refresh and are not rewritten. Their display metadata remains a snapshot until the user creates or explicitly refreshes a reference in a future feature.
+
+## Height capability
+
+Dynamic height is intentionally **disconnected in 0.4.0** while the dormant/live ownership model is validated.
+
+`src/editor/secret-block-height.ts` contains an isolated kernel-owned implementation that:
+
+- reads and writes block attributes through SiYuan kernel APIs;
+- merges only the `height` declaration into an existing `style` value;
+- clamps values;
+- deduplicates near-identical writes;
+- coalesces and serializes writes for one block;
+- never mutates Protyle or iframe DOM directly.
+
+The composition root intentionally does not instantiate or connect it. The commented integration marker in `src/index.ts` makes this decision explicit.
+
+0.4.0 therefore uses a fixed reference height and iframe-internal scrolling. Re-enabling height later must be an explicit document-presentation feature, not an automatic measurement feedback loop.
+
+## Debug story
+
+When a document is merely opened, there should be no Secret Vault runtime path to debug for a v2 reference.
+
+When a user clicks Connect, the path is finite:
+
+```text
+live.js
+  -> session:connect
+  -> EmbedSessionBroker
+  -> SecretReferenceService.matchesReference()
+  -> ProtyleContextRegistry.resolveEmbed()
+  -> VaultController.getSecretView()
+  -> dedicated MessagePort
+```
+
+After connection, one iframe's requests remain on that port. There is no global event bus for document references.
+
+If a live iframe unexpectedly clears, inspect an `AuthorizationRevocation` reason. If an ordinary Vault edit unexpectedly changes a dormant reference, that is an architecture violation.
+
+## YAGNI cuts in 0.4.0
+
+Not built or not enabled:
+
+- workspace-wide reference migration;
+- automatic snapshot synchronization;
+- BroadcastChannel;
+- visibility observers;
+- polling;
+- automatic retries or reconnect;
+- automatic host-ready refresh;
+- automatic size measurement;
+- dynamic block height integration;
+- generic extension/event systems around live sessions.
+
+These omissions are intentional. They keep the runtime surface small while the new ownership boundary is validated.
+
+## Review invariants
+
+Code review should reject a change unless deliberately justified if it introduces any of the following:
+
+```text
+Vault -> document refresh
+Vault -> reconnect
+Vault -> resize
+ordinary Vault mutation -> iframe push
+iframe load -> automatic Vault connection
+background observer -> live session creation
+plugin code -> direct NodeIFrame DOM mutation
+```
+
+Allowed directions are:
+
+```text
+Document/live session -> explicit Vault request
+Vault/access boundary -> live session revoke
+SecretReferenceService -> kernel-owned persistent block representation
+```

@@ -69,23 +69,44 @@ export interface VaultSnapshot {
   secrets: PublicSecretState[];
 }
 
+/** Current Vault state explicitly pulled by one live document session. */
 export interface SecretViewState {
-  contextId: AccessContextId;
   secretId: SecretId;
   label: string;
   groupId: GroupId;
   groupName: string;
   locked: boolean;
+  createdAt: number;
+  updatedAt: number;
   /** Present only when the current context is authorized for the group. */
   content?: string;
 }
 
+export type AuthorizationRevocationReason =
+  | "idle-timeout"
+  | "locked"
+  | "lock-all"
+  | "context-closed"
+  | "vault-reloaded"
+  | "password-changed"
+  | "group-deleted"
+  | "secret-deleted";
+
 /**
- * Events sent to embedded Secret frames. Snapshot/UI refresh is separate from
- * this type so UI-only changes cannot accidentally fan out to every iframe.
+ * Capability revocation is intentionally distinct from ordinary Vault change.
+ *
+ * Document references are clients, not replicas of Vault state. Normal data
+ * mutations never push a refresh into document iframes. Only an authorization
+ * boundary becoming invalid may proactively terminate an existing live session.
  */
-export type VaultInvalidation =
-  | { scope: "all" }
-  | { scope: "group"; groupId: GroupId }
-  | { scope: "context-group"; contextId: AccessContextId; groupId: GroupId }
-  | { scope: "secret"; secretId: SecretId };
+export type AuthorizationRevocation =
+  | { scope: "all"; reason: AuthorizationRevocationReason }
+  | { scope: "context"; contextId: AccessContextId; reason: AuthorizationRevocationReason }
+  | { scope: "group"; groupId: GroupId; reason: AuthorizationRevocationReason }
+  | {
+      scope: "context-group";
+      contextId: AccessContextId;
+      groupId: GroupId;
+      reason: AuthorizationRevocationReason;
+    }
+  | { scope: "secret"; secretId: SecretId; reason: AuthorizationRevocationReason };
