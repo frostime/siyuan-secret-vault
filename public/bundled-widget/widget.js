@@ -4,20 +4,24 @@ const FAST_TIMEOUT_MS = 8_000;
 const INTERACTIVE_TIMEOUT_MS = 10 * 60_000;
 const HOST_UNAVAILABLE_MESSAGE = "秘密库插件未启用或当前不可用";
 
-function readHostSecretId() {
+function readHostSnapshot() {
   try {
     const frame = window.frameElement;
-    const block = frame?.closest?.('[data-type="NodeIFrame"]');
-    return block?.getAttribute?.("custom-secret-id")?.trim?.() || "";
+    const block = frame?.closest?.('[data-type="NodeWidget"]');
+    return {
+      secretId: block?.getAttribute?.("custom-secret-id")?.trim?.() || "",
+      label: block?.getAttribute?.("custom-secret-label")?.trim?.() || "",
+      groupName: block?.getAttribute?.("custom-secret-group-name")?.trim?.() || "",
+    };
   } catch {
-    return "";
+    return { secretId: "", label: "", groupName: "" };
   }
 }
 
-const secretId = (new URLSearchParams(location.search).get("secret") || "").trim()
-  || readHostSecretId();
+const snapshot = readHostSnapshot();
+const secretId = snapshot.secretId;
 
-let phase = "connecting";
+let phase = "dormant";
 let currentState = null;
 let editing = false;
 let sessionId = "";
@@ -27,6 +31,7 @@ const pending = new Map();
 
 const el = {
   app: document.getElementById("app"),
+  connect: document.getElementById("connect"),
   label: document.getElementById("label"),
   meta: document.getElementById("meta"),
   status: document.getElementById("status"),
@@ -107,8 +112,9 @@ function setError(message = "", reconnect = false) {
 
 function setLoading(message = "建立显式会话…") {
   clearSensitiveState();
-  el.app.classList.add("state-loading");
-  el.app.classList.remove("state-unavailable");
+  el.connect.hidden = true;
+  el.app.classList.add("state-connecting");
+  el.app.classList.remove("state-dormant", "state-unavailable");
   el.label.textContent = "Secret";
   el.meta.textContent = message;
   el.status.textContent = "•••";
@@ -118,7 +124,8 @@ function setLoading(message = "建立显式会话…") {
 function setDisconnected(message) {
   clearSensitiveState();
   phase = "disconnected";
-  el.app.classList.remove("state-loading");
+  el.connect.hidden = true;
+  el.app.classList.remove("state-connecting", "state-dormant");
   el.app.classList.add("state-unavailable");
   el.label.textContent = "Secret Vault";
   el.meta.textContent = "会话未连接";
@@ -140,7 +147,8 @@ function formatTime(value) {
 function renderState(state) {
   currentState = state;
   phase = "live";
-  el.app.classList.remove("state-loading", "state-unavailable");
+  el.connect.hidden = true;
+  el.app.classList.remove("state-connecting", "state-dormant", "state-unavailable");
   el.label.textContent = state.label || "Secret";
   el.meta.textContent = `${state.groupName || state.groupId || ""} · ${state.locked ? "已锁定" : "本文档已解锁"}`;
   el.status.textContent = state.locked ? "🔒" : "🔓";
@@ -424,13 +432,27 @@ window.addEventListener("pagehide", () => {
   disconnectPort(true);
 }, { once: true });
 
-if (!secretId) {
-  setDisconnected("当前文档块缺少 custom-secret-id");
-  el.reconnect.hidden = true;
-} else {
-  // This page is reachable only after an explicit user navigation from the
-  // non-reactive dormant shell (or by opening a live URL directly). The
-  // Secret ID is normally read from the host block's authoritative attribute.
-  // That user action is the sole trigger for the one-time connection attempt.
-  void connect().catch(() => undefined);
+function renderDormantSnapshot() {
+  clearSensitiveState();
+  phase = "dormant";
+  el.app.classList.remove("state-connecting", "state-unavailable");
+  el.app.classList.add("state-dormant");
+  el.label.textContent = snapshot.label ? `🔐 ${snapshot.label}` : "🔐 Secret Vault";
+  el.meta.textContent = snapshot.groupName
+    ? `${snapshot.groupName} · 静态引用`
+    : "静态引用 · 未连接秘密库";
+  el.status.textContent = "○";
+  el.connect.hidden = false;
+  el.connect.disabled = !secretId;
+  setError(secretId ? "" : "当前挂件块缺少 custom-secret-id");
 }
+
+el.connect.addEventListener("click", () => {
+  if (!secretId || phase === "connecting") return;
+  el.connect.disabled = true;
+  void connect().catch(() => undefined).finally(() => {
+    if (phase === "dormant") el.connect.disabled = false;
+  });
+});
+
+renderDormantSnapshot();

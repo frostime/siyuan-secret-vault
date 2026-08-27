@@ -1,16 +1,3 @@
-/*
- * Secret Vault never writes NodeIFrame DOM styles at runtime. Once SiYuan has
- * persisted an explicit block height via the `style` IAL, let the embedded
- * page fill that host-owned height. The selector also covers older Secret
- * blocks whose iframe HTML still contains a fixed inline height.
- */
-.protyle-wysiwyg [data-type="NodeIFrame"][style^="height:"] iframe[src*="/plugins/siyuan-secret-vault/embed/index.html"],
-.protyle-wysiwyg [data-type="NodeIFrame"][style*="; height:"] iframe[src*="/plugins/siyuan-secret-vault/embed/index.html"],
-.protyle-wysiwyg [data-type="NodeIFrame"][style*=";height:"] iframe[src*="/plugins/siyuan-secret-vault/embed/index.html"] {
-  width: 100% !important;
-  height: 100% !important;
-}
-
 .secret-vault-tab {
   height: 100%;
   overflow: hidden;

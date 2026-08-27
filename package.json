@@ -1,6 +1,6 @@
 {
   "name": "siyuan-secret-vault",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "type": "module",
   "description": "Encrypted secret vault with dormant document references and explicit live sessions",
   "license": "MIT",

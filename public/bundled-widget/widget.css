@@ -125,4 +125,4 @@ button {
 button:hover { background: color-mix(in srgb, currentColor 7%, transparent); }
 button:disabled { cursor: default; opacity: .42; }
 .primary-action { border-color: color-mix(in srgb, currentColor 24%, transparent); }
-.state-loading .header { opacity: .7; }
+.state-connecting .header { opacity: .7; }

@@ -11,12 +11,12 @@ import { ProtyleContextRegistry } from "./editor/protyle-context";
 // import { SecretBlockHeightController } from "./editor/secret-block-height";
 import { SecretDialogs } from "./editor/secret-dialogs";
 import { SecretReferenceService } from "./editor/secret-reference";
-import { DormantReferenceV2RepairMigration } from "./migrations/dormant-reference-v2-repair";
-import { LegacyReferenceV1ToV2Migration } from "./migrations/legacy-reference-v1-to-v2";
+import { DocumentReferenceToWidgetMigration } from "./migrations/document-reference-to-widget";
 import type { MigrationTask } from "./migrations/types";
 import { VAULT_CONTEXT_ID } from "./types";
 import VaultApp from "./ui/VaultApp.svelte";
 import { VaultController } from "./vault";
+import { BundledWidgetInstaller } from "./widget/bundled-widget-installer";
 import "./index.scss";
 
 const TAB_TYPE = "secret-vault";
@@ -29,6 +29,7 @@ export default class SecretVaultPlugin extends Plugin {
   private vault!: VaultController;
   private contexts!: ProtyleContextRegistry;
   private references!: SecretReferenceService;
+  private widgetInstaller!: BundledWidgetInstaller;
   private dialogs!: SecretDialogs;
   private migrationTasks: MigrationTask[] = [];
   private broker: EmbedSessionBroker | null = null;
@@ -38,11 +39,11 @@ export default class SecretVaultPlugin extends Plugin {
 
     this.vault = new VaultController(this);
     this.contexts = new ProtyleContextRegistry();
-    this.references = new SecretReferenceService(this.name);
+    this.widgetInstaller = new BundledWidgetInstaller(this.name);
+    this.references = new SecretReferenceService(this.widgetInstaller);
     this.dialogs = new SecretDialogs(this.vault, this.references, this.contexts);
     this.migrationTasks = [
-      new DormantReferenceV2RepairMigration(this.vault, this.references),
-      new LegacyReferenceV1ToV2Migration(this.name, this.vault, this.references),
+      new DocumentReferenceToWidgetMigration(this.name, this.vault, this.references),
     ];
 
     // Register UI/editor integrations before the first await. SiYuan may restore
@@ -51,7 +52,16 @@ export default class SecretVaultPlugin extends Plugin {
     this.registerEditorEvents();
     this.registerSlashCommands();
 
-    // Install the handshake listener before awaiting plugin data. Dormant
+    // Install the document-owned widget package through SiYuan's file API.
+    // This is intentionally install-once: a complete existing widget directory
+    // is left untouched so synced workspaces do not oscillate between plugin
+    // versions on different devices.
+    void this.widgetInstaller.ensureInstalled().catch((error) => {
+      console.error("[secret-vault] failed to install bundled widget", error);
+      showMessage(`秘密库挂件安装失败：${error instanceof Error ? error.message : String(error)}`);
+    });
+
+    // Install the handshake listener before awaiting plugin data. Widget
     // references still do nothing until the user clicks Connect; this only
     // prevents that explicit click from being lost during a slow startup.
     const vaultReady = this.vault.initialize();
@@ -76,7 +86,7 @@ export default class SecretVaultPlugin extends Plugin {
     this.broker.start();
 
     // Optional kernel-owned height capability is implemented and type-checked
-    // in editor/secret-block-height.ts, but intentionally disconnected in 0.4.x.
+    // in editor/secret-block-height.ts, but intentionally disconnected in 0.5.0.
     // const blockHeights = new SecretBlockHeightController();
     // (No live-session presentation edge is wired to blockHeights yet.)
 
@@ -112,8 +122,10 @@ export default class SecretVaultPlugin extends Plugin {
   uninstall(): void {
     // Vault data is intentionally retained. Uninstalling for troubleshooting or
     // reinstalling the same plugin must not implicitly destroy encrypted user
-    // data or rewrite document references. Permanent data deletion should be an
-    // explicit Vault action, not a plugin lifecycle side effect.
+    // data, the deployed document widget, or document references. Existing
+    // NodeWidget blocks depend on that widget for dormant rendering. Permanent
+    // data/widget cleanup should be an explicit maintenance action, not a plugin
+    // lifecycle side effect.
   }
 
   async onDataChanged(): Promise<void> {

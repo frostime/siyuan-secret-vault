@@ -2,7 +2,7 @@
   "name": "siyuan-secret-vault",
   "author": "siyuan-secret-vault contributors",
   "url": "https://github.com/frostime/siyuan-secret-vault",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "minAppVersion": "3.8.0",
   "kernels": [
     "windows",
@@ -25,8 +25,8 @@
     "zh-CN": "秘密库"
   },
   "description": {
-    "default": "Encrypted secrets with dormant document references and explicit user-triggered live sessions.",
-    "zh-CN": "按分组加密秘密；文档引用默认静态休眠，仅在用户显式点击后建立临时会话。"
+    "default": "Encrypted secrets with document-owned SiYuan widget references and explicit live sessions.",
+    "zh-CN": "按分组加密秘密；文档引用使用思源原生挂件，默认静态，仅在用户显式点击后建立临时会话。"
   },
   "readme": {
     "default": "README.md",

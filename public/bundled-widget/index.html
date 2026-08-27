@@ -3,19 +3,20 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="./live.css" />
-  <title>Secret Vault Live Session</title>
+  <link rel="stylesheet" href="./widget.css" />
+  <title>Secret Vault Reference</title>
 </head>
 <body>
-  <main id="app" class="secret-card state-loading">
+  <main id="app" class="secret-card state-dormant">
     <div class="header">
       <div class="identity">
-        <strong id="label">Secret</strong>
-        <span id="meta">建立显式会话…</span>
+        <strong id="label">🔐 Secret Vault</strong>
+        <span id="meta">静态引用 · 未连接秘密库</span>
       </div>
       <div class="header-actions">
+        <button id="connect" class="primary-action" type="button">连接</button>
         <button id="unlock" class="primary-action" type="button" hidden>解锁</button>
-        <span id="status" class="status">•••</span>
+        <span id="status" class="status">○</span>
       </div>
     </div>
 
@@ -44,6 +45,6 @@
     </div>
   </main>
 
-  <script type="module" src="./live.js"></script>
+  <script type="module" src="./widget.js"></script>
 </body>
 </html>

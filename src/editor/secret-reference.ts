@@ -1,5 +1,7 @@
 import { showMessage, type Protyle } from "siyuan";
 import type { SecretRecord } from "../types";
+import type { BundledWidgetInstaller } from "../widget/bundled-widget-installer";
+import { SECRET_VAULT_WIDGET_URL } from "../widget/bundled-widget-installer";
 import {
   deleteBlock,
   getBlockAttrs,
@@ -9,15 +11,15 @@ import {
   type BlockInsertionTarget,
 } from "./siyuan-api";
 
-const REFERENCE_VERSION = "2";
-const DEFAULT_EMBED_HEIGHT = 178;
+const REFERENCE_VERSION = "3";
+const DEFAULT_WIDGET_HEIGHT = 178;
 
 export type SecretReferenceSource = Pick<
   SecretRecord,
   "id" | "groupId" | "label" | "createdAt" | "updatedAt"
 >;
 
-export interface DormantReferenceDefinition {
+export interface WidgetReferenceDefinition {
   markdown: string;
   attrs: Record<string, string>;
 }
@@ -30,14 +32,13 @@ export interface SlashTarget {
 /**
  * Owns the persistent SiYuan representation of a Secret reference.
  *
- * Version 2 references are dormant document-owned snapshots. Their iframe loads
- * one non-reactive local shell and does not contact the plugin runtime. The
- * only active transition is the user's explicit link navigation to live.html.
- * Secret ID remains authoritative; all other custom attributes are
- * non-authoritative display metadata.
+ * Version 3 uses SiYuan's native NodeWidget representation instead of a
+ * generic NodeIFrame. The widget owns the dormant document presentation and
+ * contacts the plugin only after the user explicitly clicks Connect. Secret ID
+ * is authoritative; the remaining custom attributes are display snapshots.
  */
 export class SecretReferenceService {
-  constructor(private readonly pluginName: string) {}
+  constructor(private readonly widgetInstaller: BundledWidgetInstaller) {}
 
   captureSlashTarget(protyle: Protyle, nodeElement: HTMLElement): SlashTarget {
     const anchorBlockId = nodeElement.dataset.nodeId || null;
@@ -76,24 +77,20 @@ export class SecretReferenceService {
     await this.insert(secret, groupName, slashTarget.insertion, slashTarget.cleanupBlockId);
   }
 
-  /** Builds the complete persistent v2 representation without writing it. */
-  buildDormantReference(
+  async ensureWidgetAvailable(): Promise<void> {
+    await this.widgetInstaller.ensureInstalled();
+  }
+
+  /** Builds the complete persistent v3 representation without writing it. */
+  buildWidgetReference(
     secret: SecretReferenceSource,
     groupName: string,
     existingStyle = "",
-  ): DormantReferenceDefinition {
-    const dormantSrc = `/plugins/${this.pluginName}/embed/index.html`;
-    const title = `Secret Vault: ${secret.label || "Secret"}`;
-    const markdown = [
-      '<iframe loading="lazy"',
-      ` src="${escapeHtmlAttribute(dormantSrc)}"`,
-      ` title="${escapeHtmlAttribute(title)}"`,
-      ` style="width: 100%; height: 100%; border: 0; border-radius: 6px;"`,
-      "></iframe>",
-    ].join("");
-
+  ): WidgetReferenceDefinition {
     return {
-      markdown,
+      // Follow SiYuan's canonical NodeWidget representation. Avoid extra iframe
+      // attributes so Lute/Protyle can own widget lifecycle and rendering.
+      markdown: `<iframe src="${SECRET_VAULT_WIDGET_URL}" data-subtype="widget"></iframe>`,
       attrs: {
         "custom-secret-vault": "1",
         "custom-secret-id": secret.id,
@@ -103,25 +100,24 @@ export class SecretReferenceService {
         "custom-secret-created-at": String(secret.createdAt),
         "custom-secret-updated-at": String(secret.updatedAt),
         "custom-secret-version": REFERENCE_VERSION,
-        style: mergeInitialHeight(existingStyle, DEFAULT_EMBED_HEIGHT),
+        style: mergeInitialHeight(existingStyle, DEFAULT_WIDGET_HEIGHT),
       },
     };
   }
 
-  /**
-   * Checks the persisted v2 iframe representation after SiYuan/Lute has parsed it.
-   *
-   * SiYuan 3.8 sanitizes `srcdoc` on document iframe blocks, so the canonical
-   * dormant representation deliberately uses a normal same-origin plugin URL.
-   */
-  isDormantReferenceMarkdown(markdown: string): boolean {
-    const src = extractIframeSrc(markdown);
-    if (src === null) return false;
+  isWidgetReferenceMarkdown(markdown: string): boolean {
+    const html = stripBlockIal(markdown).trim();
+    const iframe = html.match(/<iframe\b[^>]*>/i)?.[0] ?? "";
+    if (!iframe) return false;
+
+    const src = extractHtmlAttribute(iframe, "src");
+    const subtype = extractHtmlAttribute(iframe, "data-subtype");
+    if (src === null || subtype !== "widget") return false;
 
     try {
       const url = new URL(src, location.origin);
-      return url.pathname === `/plugins/${this.pluginName}/embed/index.html`
-        && !url.searchParams.has("secret");
+      const normalized = url.pathname.replace(/\/$/, "");
+      return normalized === SECRET_VAULT_WIDGET_URL;
     } catch {
       return false;
     }
@@ -131,6 +127,7 @@ export class SecretReferenceService {
   async matchesReference(blockId: string, secretId: string): Promise<boolean> {
     const attrs = await getBlockAttrs(blockId);
     return attrs["custom-secret-vault"] === "1"
+      && attrs["custom-secret-version"] === REFERENCE_VERSION
       && attrs["custom-secret-id"] === secretId;
   }
 
@@ -153,28 +150,25 @@ export class SecretReferenceService {
     target: BlockInsertionTarget,
     cleanupBlockId: string | null,
   ): Promise<void> {
-    const initialDefinition = this.buildDormantReference(secret, groupName);
+    await this.ensureWidgetAvailable();
+
+    const initialDefinition = this.buildWidgetReference(secret, groupName);
     const inserted = await insertMarkdownBlock(initialDefinition.markdown, target);
 
-    // Standalone <iframe> must become a real NodeIFrame. Fail closed if a
-    // future Lute version changes this parse rule.
-    if (inserted.dom && !inserted.dom.includes('data-type="NodeIFrame"')) {
+    if (inserted.dom && !inserted.dom.includes('data-type="NodeWidget"')) {
       await deleteBlock(inserted.id).catch(() => undefined);
-      throw new Error("思源没有把嵌入内容解析为 IFrame 块；已回滚此次插入");
+      throw new Error("思源没有把 Secret 引用解析为挂件块；已回滚此次插入");
     }
 
-    // Validate what SiYuan actually persisted, not only the HTML we generated.
-    // This specifically guards against sanitizers silently dropping iframe
-    // attributes (the 0.4.0/0.4.1 srcdoc regression).
     const persistedMarkdown = await getBlockKramdown(inserted.id);
-    if (!this.isDormantReferenceMarkdown(persistedMarkdown)) {
+    if (!this.isWidgetReferenceMarkdown(persistedMarkdown)) {
       await deleteBlock(inserted.id).catch(() => undefined);
-      throw new Error("思源改写了 Secret 静态引用；已回滚此次插入，请升级插件后重试");
+      throw new Error("思源改写了 Secret 挂件引用；已回滚此次插入");
     }
 
     try {
       const attrs = await getBlockAttrs(inserted.id);
-      const definition = this.buildDormantReference(secret, groupName, attrs.style ?? "");
+      const definition = this.buildWidgetReference(secret, groupName, attrs.style ?? "");
       await setBlockAttrs(inserted.id, definition.attrs);
     } catch (error) {
       await deleteBlock(inserted.id).catch(() => undefined);
@@ -190,8 +184,6 @@ export class SecretReferenceService {
       const kramdown = await getBlockKramdown(blockId);
       const source = normalizeEditorText(kramdown.replace(/\n?\{:[\s\S]*$/, ""));
 
-      // The dialog is asynchronous. Re-check persisted content before deleting
-      // the slash source so user edits made while the dialog was open survive.
       if (isSlashOnlyText(source)) {
         await deleteBlock(blockId);
       }
@@ -201,12 +193,13 @@ export class SecretReferenceService {
   }
 }
 
-function extractIframeSrc(markdown: string): string | null {
-  const html = markdown.replace(/\n?\{:[\s\S]*$/, "").trim();
-  const iframe = html.match(/<iframe\b[^>]*>/i)?.[0] ?? "";
-  if (!iframe) return null;
+function stripBlockIal(markdown: string): string {
+  return markdown.replace(/\n?\{:[\s\S]*$/, "");
+}
 
-  const match = iframe.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+function extractHtmlAttribute(tag: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = tag.match(new RegExp(`\\b${escaped}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i"));
   if (!match) return null;
   return match[1] ?? match[2] ?? match[3] ?? "";
 }
@@ -217,17 +210,6 @@ function normalizeEditorText(value: string): string {
 
 function isSlashOnlyText(value: string): boolean {
   return /^\/\S*$/.test(value);
-}
-
-function escapeHtmlText(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function escapeHtmlAttribute(value: string): string {
-  return escapeHtmlText(value).replaceAll('"', "&quot;");
 }
 
 function mergeInitialHeight(style: string, height: number): string {

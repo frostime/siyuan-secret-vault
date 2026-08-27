@@ -91,3 +91,43 @@ export async function updateMarkdownBlock(id: string, markdown: string): Promise
     data: markdown,
   });
 }
+
+export interface WorkspaceDirectoryEntry {
+  isDir: boolean;
+  isSymlink: boolean;
+  name: string;
+  updated: number;
+}
+
+export async function readWorkspaceDirectory(path: string): Promise<WorkspaceDirectoryEntry[]> {
+  return kernelPost<WorkspaceDirectoryEntry[]>("/api/file/readDir", { path });
+}
+
+export async function putWorkspaceDirectory(path: string): Promise<void> {
+  const form = new FormData();
+  form.append("path", path);
+  form.append("isDir", "true");
+  form.append("modTime", String(Math.floor(Date.now() / 1000)));
+  await kernelMultipartPost("/api/file/putFile", form);
+}
+
+export async function putWorkspaceFile(
+  path: string,
+  content: Blob,
+  fileName: string,
+): Promise<void> {
+  const form = new FormData();
+  form.append("path", path);
+  form.append("isDir", "false");
+  form.append("modTime", String(Math.floor(Date.now() / 1000)));
+  form.append("file", content, fileName);
+  await kernelMultipartPost("/api/file/putFile", form);
+}
+
+async function kernelMultipartPost(url: string, body: FormData): Promise<void> {
+  const response = await fetch(url, { method: "POST", body });
+  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+
+  const result = await response.json();
+  if (result.code !== 0) throw new Error(result.msg || `${url}: code ${result.code}`);
+}

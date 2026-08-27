@@ -1,280 +1,261 @@
-# Secret Vault Architecture — 0.4.x
+# Secret Vault Architecture
 
-## Decision pressure
+## 1. Core ownership rule
 
-The 0.4 architecture is optimized for one failure mode above all others: a Secret reference inside a SiYuan document must not become an always-on remote projection controlled by a process-wide Vault UI.
+The document owns every Secret reference block.
 
-The 0.3 design made every NodeIFrame an active replica of Vault state. Vault mutations produced invalidations, invalidations were broadcast to every iframe, frames refreshed themselves, and presentation changes could feed back into SiYuan's NodeIFrame lifecycle. That design had three complexity symptoms:
+A Secret reference is **not** a replica of Vault state and the Vault does not
+push ordinary data changes into document blocks. The block decides when to ask
+for Vault capabilities. The Vault owns only encrypted data, cryptographic keys,
+authorization, and capability revocation.
 
-- **Change amplification** — a Vault state change crossed VaultController, invalidation types, the broker, BroadcastChannel, iframe filtering, refresh, and presentation logic.
-- **Cognitive load** — understanding one document block required understanding global Vault state, Protyle identity, broadcast fan-out, plugin lifecycle, iframe lifecycle, and resize behavior at once.
-- **Unknown unknowns** — opening a document could trigger plugin work even when the user did nothing, making it difficult to reconstruct why an iframe refreshed or why SiYuan rerendered it.
-
-The core ownership rule is therefore:
-
-> **Document blocks are clients, not replicas of Vault state.**
->
-> A Secret reference owns its presentation and decides when to connect. The Vault owns encrypted data, cryptography, authorization, and key lifetime. The Vault never pushes ordinary data changes into document references; it may only revoke a capability that it previously granted.
-
-## Alternatives considered
-
-Two decomposition axes were credible.
-
-### A. Keep the realtime projection and add a lazy gate
-
-The existing `Vault -> invalidation -> BroadcastChannel -> iframe refresh` graph could remain, with a boolean that delays activation until the iframe becomes visible or is clicked.
-
-This is a small diff, but it preserves the leaked design knowledge: Vault still knows that document UI should refresh, every iframe still participates in global fan-out after activation, and the debug story still crosses the same modules. It reduces startup work without fixing ownership.
-
-### B. Separate dormant references from explicit live sessions
-
-The document owns an inert persisted reference. Only an explicit user action creates a temporary live client session. Each live session gets its own `MessagePort`. Ordinary Vault changes do not propagate to document blocks; capability revocation is a separate semantic channel.
-
-This is a larger refactor, but it removes the dominant non-local control flow and gives each design decision one owner. 0.4 uses this model.
-
-## State ownership
-
-### `VaultController`
-
-Owns:
-
-- the last successfully persisted `VaultData`;
-- crypto orchestration over that committed data;
-- mutation serialization through `VaultMutationCoordinator`;
-- snapshot publication for the built-in Vault UI;
-- facts that an existing authorization capability has become invalid.
-
-It does **not** own document rendering, iframe refresh, reconnect, or block presentation.
-
-### `GroupAccessManager`
-
-Owns:
-
-- runtime-only `CryptoKey` references;
-- context authorization;
-- the 15-minute inactivity timer;
-- context terminal lifecycle (a released context cannot be reactivated).
-
-### `SecretReferenceService`
-
-Owns the persistent SiYuan representation of one document reference.
-
-New references use `custom-secret-version=2` and persist:
-
-- `custom-secret-vault=1`;
-- `custom-secret-id` — authoritative identity;
-- `custom-secret-group`;
-- `custom-secret-label` — display snapshot;
-- `custom-secret-group-name` — display snapshot;
-- `custom-secret-created-at` — display snapshot;
-- `custom-secret-updated-at` — display snapshot.
-
-Only `custom-secret-id` is authoritative. Snapshot metadata is intentionally allowed to become stale. Renaming a Secret in the Vault does not scan or rewrite documents.
-
-The persistent iframe points to `/plugins/<plugin>/embed/index.html`, a same-origin non-reactive dormant shell. SiYuan 3.8 sanitizes `srcdoc` on document iframe blocks, so `srcdoc` is intentionally not part of the representation. Snapshot metadata remains in block attributes. The shell may read those host attributes once to render its own label/group snapshot, but it performs no parent communication, polling, observation, or automatic refresh.
-
-### `ProtyleContextRegistry`
-
-Owns only:
-
-- `Protyle -> AccessContextId` identity;
-- Protyle lifecycle;
-- one-time mapping from an explicitly connecting child `Window` to the containing NodeIFrame block and Protyle context.
-
-It deliberately knows nothing about Secret Vault URL paths or protocol messages.
-
-### `MigrationTask` / `LegacyReferenceV1ToV2Migration`
-
-Own explicit, user-triggered maintenance transformations exposed by the Vault tab. Migration tasks own discovery, validation, sequential writes, verification, and retry semantics. The Vault UI only renders task state and progress.
-
-The v1 -> v2 task treats `custom-secret-id` as authoritative, cross-checks legacy iframe identity, refuses conflicts instead of guessing, re-validates each block immediately before writing, and reuses `SecretReferenceService` to build the canonical v2 representation. No migration runs during plugin startup.
-
-0.4.2 also includes an explicit repair task for v2 references created by 0.4.0/0.4.1. Those releases used `srcdoc`, which SiYuan 3.8 removes from persisted iframe blocks; the repair rewrites only affected v2 blocks to the canonical dormant-shell URL.
-
-### `EmbedSessionBroker`
-
-Owns temporary live iframe sessions.
-
-One live session contains:
-
-- session ID;
-- Secret ID and Group ID;
-- AccessContext ID;
-- source block ID;
-- source `Window`;
-- one dedicated `MessagePort`;
-- per-session request ordering.
-
-The broker performs no iframe discovery, polling, BroadcastChannel fan-out, host-ready announcement, automatic refresh, or reconnect.
-
-### `live.js`
-
-Owns presentation state inside one explicitly connected iframe. It may request operations over its dedicated port only because the user first chose to connect that reference.
-
-If a session is revoked it immediately deletes plaintext from the DOM, clears edit buffers, closes the port, and becomes disconnected. It never reconnects automatically.
-
-## Dormant -> live control flow
-
-### New v2 reference
+Allowed directions:
 
 ```text
-SiYuan opens document
-    -> NodeIFrame lazily loads non-reactive dormant shell
-    -> no plugin request
-    -> no Vault read
-    -> no timer
-    -> no BroadcastChannel
-
-user clicks 连接
-    -> iframe navigates itself to live.html; live.html reads authoritative custom-secret-id from the host block
-    -> live page creates MessageChannel
-    -> one window.postMessage(session:connect, transferred port)
-    -> parent validates block attributes + Protyle context
-    -> parent returns current state on the dedicated port
-    -> explicit user operations continue on that port
+Document widget -> Vault request
+Vault -> live-session revocation
 ```
 
-The initial live connection is itself user-triggered. Loading the document is not a connection event.
-
-### Legacy v1 reference
-
-Existing v1 documents are never migrated automatically.
-
-`public/embed/index.html` is the non-reactive dormant shell for both v2 references and legacy v1 references. `dormant.js` performs one synchronous read of the host block's snapshot attributes so the block can render its own label/group; it has no messages, timers, observers, polling, Vault access, or host-ready behavior. Its only live transition is the ordinary `连接` link to `live.html`.
-
-The Vault tab contains an explicit migration center. Its v1 -> v2 task performs a read-only SQL scan first, shows ready/problem counts, and only rewrites documents after the user confirms `开始迁移`. Blocks are processed serially and retain their existing block IDs.
-
-Newly inserted references naturally use v2.
-
-## Explicit operations
-
-A connected iframe may explicitly request:
-
-- `secret:get-state` — only from the user's Refresh action;
-- `secret:reveal` — Unlock;
-- `secret:copy` — Copy;
-- `secret:update` — Save;
-- `secret:lock-group` — Lock.
-
-Normal `createSecret`, `updateSecret`, group rename, Vault-tab selection, plugin readiness, and snapshot publication do not push anything into document references.
-
-Two live references to the same Secret are independent clients. Updating one does not automatically refresh the other.
-
-## Capability revocation
-
-Capability revocation is deliberately not called “invalidation”. It does not mean “please refresh”. It means “this live session may no longer retain or use the capability it was relying on”.
-
-`VaultController` may publish revocation facts for:
-
-- inactivity timeout;
-- explicit group lock;
-- lock-all;
-- Protyle/context destruction;
-- official-sync reload of `vault.json`;
-- group password change;
-- group deletion;
-- Secret deletion.
-
-`EmbedSessionBroker` matches only existing live sessions and sends `session:revoked`. The child then wipes plaintext and disconnects. It does not pull new data or reconnect.
-
-Plugin unload is broker-owned and similarly revokes all currently live sessions with `plugin-stopping`. Dormant references are untouched.
-
-## Sync behavior
-
-`vault.json` remains in SiYuan's plugin data storage through `Plugin.saveData/loadData`.
-
-`onDataChanged()` reloads committed Vault data, clears runtime grants, and revokes current live sessions. Dormant references do not refresh and are not rewritten. Their display metadata remains a snapshot until the user creates or explicitly refreshes a reference in a future feature.
-
-## Height capability
-
-Dynamic height is intentionally **disconnected in 0.4.x** while the dormant/live ownership model is validated.
-
-`src/editor/secret-block-height.ts` contains an isolated kernel-owned implementation that:
-
-- reads and writes block attributes through SiYuan kernel APIs;
-- merges only the `height` declaration into an existing `style` value;
-- clamps values;
-- deduplicates near-identical writes;
-- coalesces and serializes writes for one block;
-- never mutates Protyle or iframe DOM directly.
-
-The composition root intentionally does not instantiate or connect it. The commented integration marker in `src/index.ts` makes this decision explicit.
-
-0.4.x therefore uses a fixed reference height and iframe-internal scrolling. Re-enabling height later must be an explicit document-presentation feature, not an automatic measurement feedback loop.
-
-## Debug story
-
-When a document is merely opened, there should be no Secret Vault runtime path to debug for a v2 reference.
-
-When a user clicks Connect, the path is finite:
+Forbidden direction:
 
 ```text
-live.js
-  -> session:connect
-  -> EmbedSessionBroker
-  -> SecretReferenceService.matchesReference()
-  -> ProtyleContextRegistry.resolveEmbed()
-  -> VaultController.getSecretView()
-  -> dedicated MessagePort
+Vault -> refresh/re-render/reconnect every document reference
 ```
 
-After connection, one iframe's requests remain on that port. There is no global event bus for document references.
+This rule removes the old global invalidation/BroadcastChannel ownership model.
 
-If a live iframe unexpectedly clears, inspect an `AuthorizationRevocation` reason. If an ordinary Vault edit unexpectedly changes a dormant reference, that is an architecture violation.
+## 2. Persistent document representation
 
-## YAGNI cuts in 0.4.x
+Version 3 references use SiYuan's native `NodeWidget` representation:
 
-Not built or not enabled:
+```html
+<iframe src="/widgets/siyuan-secret-vault-widget" data-subtype="widget"></iframe>
+```
 
-- automatic snapshot synchronization;
-- BroadcastChannel;
-- visibility observers;
-- polling;
-- automatic retries or reconnect;
-- automatic host-ready refresh;
-- automatic size measurement;
-- dynamic block height integration;
-- generic extension/event systems around live sessions.
-
-These omissions are intentional. They keep the runtime surface small while the new ownership boundary is validated.
-
-## Review invariants
-
-Code review should reject a change unless deliberately justified if it introduces any of the following:
+Block attributes contain the authoritative Secret identity plus non-authoritative
+presentation snapshots:
 
 ```text
-Vault -> document refresh
-Vault -> reconnect
-Vault -> resize
-ordinary Vault mutation -> iframe push
-iframe load -> automatic Vault connection
-background observer -> live session creation
-plugin code -> direct NodeIFrame DOM mutation
+custom-secret-vault=1
+custom-secret-version=3
+custom-secret-id=<authoritative Secret ID>
+custom-secret-group=<group ID snapshot>
+custom-secret-label=<label snapshot>
+custom-secret-group-name=<group-name snapshot>
+custom-secret-created-at=<timestamp snapshot>
+custom-secret-updated-at=<timestamp snapshot>
 ```
 
-Allowed directions are:
+`custom-secret-id` is the only authoritative reference identity. Snapshot fields
+may be stale until a user explicitly reconnects or a future explicit snapshot
+maintenance task is run.
+
+## 3. Bundled widget deployment
+
+The plugin ships an internal widget package under:
 
 ```text
-Document/live session -> explicit Vault request
-Vault/access boundary -> live session revoke
-SecretReferenceService -> kernel-owned persistent block representation
+public/bundled-widget/
 ```
 
-
-## Migration center
-
-Migration is a permanent maintenance surface in the Vault tab, not a startup side effect.
-
-Allowed control flow:
+At startup `BundledWidgetInstaller` checks:
 
 ```text
-user opens 数据与迁移
-    -> choose MigrationTask
-    -> inspect()        # read-only
-    -> preview
-    -> explicit confirm
-    -> run(preview)     # sequential kernel writes
-    -> verify each block
+/data/widgets/siyuan-secret-vault-widget
 ```
 
-A task must not duplicate the canonical representation it migrates to. The v1 -> v2 task calls `SecretReferenceService.buildDormantReference()` so insertion and migration cannot silently drift into different v2 formats.
+through SiYuan `/api/file/*` APIs. If the directory is missing, the plugin
+creates it and copies the bundled widget files. If the directory exists, the
+plugin only fills missing managed files and does not overwrite a complete
+installation.
+
+This install-once policy is deliberate:
+
+- `data/widgets` is normal SiYuan workspace data and participates in sync;
+- two devices running different plugin versions must not continuously overwrite
+  the synchronized widget package with different local versions;
+- a future breaking widget update belongs in the explicit Migration Center, not
+  in a hidden startup rewrite.
+
+The widget is retained when the plugin is disabled or uninstalled because
+existing document blocks depend on it for their dormant presentation.
+
+## 4. Dormant widget state
+
+Loading a document creates a normal SiYuan `NodeWidget`. Its widget script only
+reads the containing block's snapshot attributes once and renders the dormant
+card.
+
+Dormant state does **not**:
+
+- send `postMessage`;
+- access the Vault;
+- start a timer;
+- poll;
+- observe DOM mutations;
+- open a MessageChannel;
+- refresh when Vault data changes;
+- reconnect when the plugin becomes ready.
+
+The only transition to a live Vault client is an explicit user click on
+`连接`.
+
+## 5. Explicit live session
+
+On explicit Connect:
+
+```text
+NodeWidget
+  -> one window.postMessage(session:connect + transferred MessagePort)
+  -> EmbedSessionBroker validates source block/context/secret ID
+  -> dedicated MessagePort becomes the session transport
+```
+
+A live session owns:
+
+```text
+sessionId
+secretId
+groupId
+contextId
+blockId
+source Window
+MessagePort
+```
+
+Normal operations are user-driven requests on that port:
+
+```text
+secret:get-state
+secret:reveal
+secret:copy
+secret:update
+secret:lock-group
+```
+
+There is no BroadcastChannel and no ordinary parent-to-child refresh command.
+
+## 6. Capability revocation
+
+The one proactive parent-to-child action is revocation. Revocation is not UI
+synchronization; it terminates a capability previously granted by the Vault.
+
+Examples:
+
+```text
+idle timeout
+manual group lock
+context destruction
+vault reload after official sync
+password change
+group deletion
+secret deletion
+plugin unload
+```
+
+On revocation, the widget must immediately:
+
+```text
+wipe plaintext
+wipe edit buffers
+reject pending operations
+close MessagePort
+show disconnected state
+```
+
+It never auto-reconnects.
+
+## 7. Protyle context ownership
+
+`ProtyleContextRegistry` owns only:
+
+- `Protyle <-> AccessContextId` identity;
+- one-time resolution of an explicitly connecting `NodeWidget` source window to
+  its Protyle context and block ID;
+- context release when a Protyle is destroyed.
+
+It does not know Vault data and does not scan generic `NodeIFrame` references.
+Once the MessagePort session is established, no further DOM lookup is required.
+
+## 8. Vault and access ownership
+
+`VaultController` owns committed persistent Vault state and the single-writer
+mutation coordinator.
+
+`GroupAccessManager` owns:
+
+- runtime `CryptoKey` references;
+- context-scoped group authorization;
+- 15-minute inactivity timers;
+- terminal context release.
+
+Persistent mutations remain serialized over the complete clone -> crypto ->
+persist -> commit lifecycle. `this.data` always represents the last successfully
+persisted Vault snapshot.
+
+## 9. Migration Center
+
+Plugin startup never scans or rewrites user documents.
+
+The Vault tab contains a permanent `数据与迁移` section. Version 0.5.0 exposes an
+explicit migration task that converts v1/v2 Secret Vault generic IFrame blocks
+to v3 `NodeWidget` blocks.
+
+Migration properties:
+
+- scan is read-only;
+- execution is explicitly user-triggered;
+- blocks are processed serially;
+- `custom-secret-id` remains authoritative;
+- v1 URL identity is used only as a consistency check;
+- conflicts fail closed instead of guessing;
+- original block IDs are retained;
+- each converted block is re-read and verified;
+- partial `markdown updated / attrs not updated` cases are retryable.
+
+Legacy `/plugins/siyuan-secret-vault/embed/index.html` is kept only as a zero-JS
+migration notice. It no longer connects to the Vault.
+
+## 10. Height capability
+
+`src/editor/secret-block-height.ts` contains the optional kernel-owned block
+height capability. It uses block attributes and never mutates Protyle DOM.
+
+The runtime integration edge is intentionally disconnected in 0.5.0. New v3
+references receive one fixed initial height. Re-enabling dynamic height later
+must be an explicit architecture decision and should use the isolated module,
+not DOM measurement feedback spread across widget/session/Vault code.
+
+## 11. Module ownership
+
+```text
+src/vault.ts
+  committed encrypted Vault state and persistent mutation orchestration
+
+src/access.ts
+  runtime authorization, CryptoKey lifetime, inactivity timers
+
+src/mutation-coordinator.ts
+  global single-writer persistent mutation order
+
+src/editor/secret-reference.ts
+  canonical v3 NodeWidget reference representation and insertion
+
+src/widget/bundled-widget-installer.ts
+  install-once deployment of the document-owned widget package
+
+src/editor/protyle-context.ts
+  Protyle/context identity and one-time NodeWidget source resolution
+
+src/embed/broker.ts + protocol.ts
+  explicit live sessions and capability revocation
+
+src/migrations/document-reference-to-widget.ts
+  explicit v1/v2 -> v3 document migration
+
+public/bundled-widget/*
+  dormant presentation and explicit live client
+
+public/embed/index.html
+  zero-JS legacy migration notice only
+```

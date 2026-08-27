@@ -12,7 +12,7 @@ interface HeightState {
 /**
  * Optional, kernel-owned presentation capability for Secret reference height.
  *
- * This module is intentionally not wired into the 0.4.x runtime. It contains
+ * This module is intentionally not wired into the 0.5.0 runtime. It contains
  * the complete persistence boundary so re-enabling height later does not
  * require DOM mutation or leak resize policy into session/Vault code.
  */

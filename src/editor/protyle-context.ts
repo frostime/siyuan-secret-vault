@@ -11,7 +11,9 @@ export interface ResolvedEmbed {
  * Owns Protyle identity and the one-time mapping from a child Window to its
  * document context.
  *
- * The registry deliberately knows nothing about Secret Vault URLs or live
+ * New references are native NodeWidget blocks; generic NodeIFrame blocks are
+ * not accepted as live-session sources. The registry deliberately knows
+ * nothing about Secret Vault URLs or live
  * session protocol. EmbedSessionBroker validates Secret reference attributes
  * separately. Once a live session is connected, its MessagePort carries the
  * context identity and no further DOM lookup is needed.
@@ -159,7 +161,7 @@ export class ProtyleContextRegistry {
   }
 
   private findEmbedBlockId(frame: HTMLIFrameElement): string | null {
-    const block = frame.closest<HTMLElement>('[data-type="NodeIFrame"][data-node-id]');
+    const block = frame.closest<HTMLElement>('[data-type="NodeWidget"][data-node-id]');
     return block?.dataset.nodeId ?? null;
   }
 
