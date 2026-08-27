@@ -2,6 +2,7 @@ import { showMessage, type Protyle } from "siyuan";
 import type { GroupId, SecretId } from "../types";
 import {
   deleteBlock,
+  getBlockAttrs,
   getBlockKramdown,
   insertMarkdownBlock,
   setBlockAttrs,
@@ -9,6 +10,14 @@ import {
 } from "./siyuan-api";
 
 const INITIAL_EMBED_HEIGHT = 54;
+const MIN_EMBED_HEIGHT = 42;
+const MAX_EMBED_HEIGHT = 420;
+const HEIGHT_WRITE_EPSILON = 4;
+
+interface ResizeState {
+  pendingHeight: number | null;
+  running: Promise<void> | null;
+}
 
 export interface SecretReferenceDescriptor {
   id: SecretId;
@@ -23,6 +32,8 @@ export interface SlashTarget {
 
 /** Owns the SiYuan block format used to reference one vault secret. */
 export class SecretReferenceService {
+  private readonly resizeStateByBlock = new Map<string, ResizeState>();
+
   constructor(private readonly pluginName: string) {}
 
   captureSlashTarget(protyle: Protyle, nodeElement: HTMLElement): SlashTarget {
@@ -57,6 +68,56 @@ export class SecretReferenceService {
     await this.insert(secret, slashTarget.insertion, slashTarget.cleanupBlockId);
   }
 
+  /**
+   * Persists an interaction-driven embed height through SiYuan's block
+   * attribute API. The plugin never mutates Protyle's NodeIFrame DOM directly.
+   *
+   * Requests for the same block are coalesced and serialized so quick
+   * edit/cancel interactions cannot finish out of order.
+   */
+  resizeEmbedBlock(blockId: string, requestedHeight: number): Promise<void> {
+    const height = clampEmbedHeight(requestedHeight);
+    let state = this.resizeStateByBlock.get(blockId);
+
+    if (!state) {
+      state = { pendingHeight: null, running: null };
+      this.resizeStateByBlock.set(blockId, state);
+    }
+
+    state.pendingHeight = height;
+    if (!state.running) {
+      state.running = this.flushResizeRequests(blockId, state).finally(() => {
+        state!.running = null;
+        if (state!.pendingHeight === null) this.resizeStateByBlock.delete(blockId);
+      });
+    }
+
+    return state.running;
+  }
+
+  private async flushResizeRequests(blockId: string, state: ResizeState): Promise<void> {
+    while (state.pendingHeight !== null) {
+      const height = state.pendingHeight;
+      state.pendingHeight = null;
+      await this.persistEmbedHeight(blockId, height);
+    }
+  }
+
+  private async persistEmbedHeight(blockId: string, height: number): Promise<void> {
+    const attrs = await getBlockAttrs(blockId);
+    if (attrs["custom-secret-vault"] !== "1") return;
+
+    const currentStyle = attrs.style ?? "";
+    const currentHeight = readPixelHeight(currentStyle);
+    if (currentHeight !== null && Math.abs(currentHeight - height) < HEIGHT_WRITE_EPSILON) {
+      return;
+    }
+
+    await setBlockAttrs(blockId, {
+      style: mergeStyleHeight(currentStyle, height),
+    });
+  }
+
   private resolveEditorInsertionTarget(protyle: Protyle): BlockInsertionTarget {
     const selection = globalThis.getSelection?.();
     const anchorNode = selection?.anchorNode ?? null;
@@ -88,11 +149,13 @@ export class SecretReferenceService {
     }
 
     try {
+      const attrs = await getBlockAttrs(inserted.id);
       await setBlockAttrs(inserted.id, {
         "custom-secret-vault": "1",
         "custom-secret-id": secret.id,
         "custom-secret-group": secret.groupId,
         "custom-secret-version": "1",
+        style: mergeStyleHeight(attrs.style ?? "", INITIAL_EMBED_HEIGHT),
       });
     } catch (error) {
       await deleteBlock(inserted.id).catch(() => undefined);
@@ -125,4 +188,42 @@ function normalizeEditorText(value: string): string {
 
 function isSlashOnlyText(value: string): boolean {
   return /^\/\S*$/.test(value);
+}
+
+function clampEmbedHeight(value: number): number {
+  return Math.round(Math.max(MIN_EMBED_HEIGHT, Math.min(MAX_EMBED_HEIGHT, value)));
+}
+
+function readPixelHeight(style: string): number | null {
+  const match = style.match(/(?:^|;)\s*height\s*:\s*(-?\d+(?:\.\d+)?)px(?:\s*!important)?\s*(?=;|$)/i);
+  if (!match) return null;
+
+  const value = Number.parseFloat(match[1]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function mergeStyleHeight(style: string, height: number): string {
+  const declaration = `height: ${height}px`;
+  const heightPattern = /(^|;)\s*height\s*:[^;]*/gi;
+
+  if (heightPattern.test(style)) {
+    heightPattern.lastIndex = 0;
+    let replaced = false;
+    const merged = style.replace(heightPattern, (match, separator: string) => {
+      if (replaced) return separator;
+      replaced = true;
+      return `${separator}${separator ? " " : ""}${declaration}`;
+    });
+    return ensureTrailingSemicolon(merged);
+  }
+
+  const prefix = style.trim();
+  return prefix
+    ? `${ensureTrailingSemicolon(prefix)} ${declaration};`
+    : `${declaration};`;
+}
+
+function ensureTrailingSemicolon(style: string): string {
+  const trimmed = style.trim();
+  return !trimmed || trimmed.endsWith(";") ? trimmed : `${trimmed};`;
 }

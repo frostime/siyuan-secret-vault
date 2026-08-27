@@ -43,7 +43,11 @@ export default class SecretVaultPlugin extends Plugin {
     this.registerEditorEvents();
     this.registerSlashCommands();
 
-    await this.vault.initialize();
+    // Start the broker before awaiting plugin data. SiYuan may restore a
+    // document iframe while loadData() is still in flight; the broker keeps
+    // that first request alive behind this readiness promise instead of losing
+    // the postMessage entirely.
+    const vaultReady = this.vault.initialize();
 
     this.broker = new EmbedBroker(this.vault, {
       resolveContext: (source) => {
@@ -60,12 +64,35 @@ export default class SecretVaultPlugin extends Plugin {
         }
       },
       requestUnlock: (contextId, groupId) => this.dialogs.requestUnlock(contextId, groupId),
-      resizeEmbed: (source, height) => this.contexts.resizeEmbed(source, height),
-    });
+      resizeEmbed: async (source, height) => {
+        const resolved = this.contexts.resolveEmbed(source);
+        if (!resolved) return;
+
+        try {
+          // Do not persist a late resize for a Protyle whose access context was
+          // already released during teardown.
+          this.vault.activateContext(resolved.contextId);
+        } catch {
+          return;
+        }
+
+        await this.references.resizeEmbedBlock(resolved.blockId, height);
+      },
+    }, vaultReady);
     this.broker.start();
     this.unsubscribeInvalidations = this.vault.subscribeInvalidations(
       (invalidation) => this.broker?.invalidate(invalidation),
     );
+
+    try {
+      await vaultReady;
+    } catch (error) {
+      this.unsubscribeInvalidations?.();
+      this.unsubscribeInvalidations = null;
+      this.broker.dispose();
+      this.broker = null;
+      throw error;
+    }
   }
 
   onLayoutReady(): void {

@@ -66,8 +66,9 @@ function request(type, data) {
 
 /**
  * Resize is deliberately interaction-driven. Initial load and background
- * invalidation never call this function, so opening a large document does not
- * create an N-iframe resize burst in Protyle.
+ * invalidation never call this function. The parent persists the requested
+ * height through SiYuan's block-attribute API; this frame never edits Protyle
+ * DOM directly.
  */
 function requestFrameResize() {
   if (resizeScheduled) return;
@@ -293,9 +294,9 @@ el.copy.addEventListener("click", async () => {
     if (!response.ok) throw new Error(response.error || "复制失败");
   } catch (error) {
     setError(error?.message || String(error));
+    requestFrameResize();
   } finally {
     el.copy.disabled = false;
-    requestFrameResize();
   }
 });
 

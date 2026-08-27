@@ -13,7 +13,7 @@ import {
 export interface EmbedHost {
   resolveContext(source: Window): AccessContextId | null;
   requestUnlock(contextId: AccessContextId, groupId: GroupId): Promise<boolean>;
-  resizeEmbed(source: Window, height: number): void;
+  resizeEmbed(source: Window, height: number): Promise<void>;
 }
 
 /** Bridges the thin iframe UI to context-aware vault operations in the plugin. */
@@ -24,6 +24,7 @@ export class EmbedBroker {
   constructor(
     private readonly vault: VaultController,
     private readonly host: EmbedHost,
+    private readonly ready: Promise<void> = Promise.resolve(),
   ) {}
 
   start(): void {
@@ -53,7 +54,12 @@ export class EmbedBroker {
     if (!source || typeof source.postMessage !== "function") return;
 
     if (isEmbedResizeMessage(event.data)) {
-      this.host.resizeEmbed(source, event.data.height);
+      try {
+        await this.ready;
+        await this.host.resizeEmbed(source, event.data.height);
+      } catch (error) {
+        console.warn("[secret-vault] failed to persist embed height", error);
+      }
       return;
     }
 
@@ -72,13 +78,18 @@ export class EmbedBroker {
       } satisfies EmbedResponse, event.origin);
     };
 
-    const contextId = this.host.resolveContext(source);
-    if (!contextId) {
-      respond({ ok: false, error: "无法识别当前 Secret 所属的文档编辑器" });
-      return;
-    }
-
     try {
+      // The listener starts before VaultController.initialize() finishes. Early
+      // restored iframes wait here instead of losing their first get-state
+      // message during SiYuan startup.
+      await this.ready;
+
+      const contextId = this.host.resolveContext(source);
+      if (!contextId) {
+        respond({ ok: false, error: "无法识别当前 Secret 所属的文档编辑器" });
+        return;
+      }
+
       if (request.type === "secret:get-state") {
         respond({ ok: true, data: await this.vault.getSecretView(contextId, request.secretId) });
         return;

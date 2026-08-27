@@ -332,7 +332,6 @@ export class VaultController {
           secret.id,
           plaintexts.get(secret.id)!,
         );
-        secret.updatedAt = Date.now();
       }
 
       group.kdf = newKdf;

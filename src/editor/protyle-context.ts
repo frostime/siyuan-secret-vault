@@ -4,6 +4,7 @@ import type { AccessContextId } from "../types";
 export interface ResolvedEmbed {
   contextId: AccessContextId;
   frame: HTMLIFrameElement;
+  blockId: string;
 }
 
 /**
@@ -88,7 +89,8 @@ export class ProtyleContextRegistry {
       && cachedFrame.contentWindow === source
       && cachedContext
     ) {
-      return { contextId: cachedContext, frame: cachedFrame };
+      const blockId = this.findEmbedBlockId(cachedFrame);
+      if (blockId) return { contextId: cachedContext, frame: cachedFrame, blockId };
     }
 
     const frame = this.findOwnEmbedFrame(source);
@@ -117,27 +119,6 @@ export class ProtyleContextRegistry {
     }
 
     return null;
-  }
-
-  resizeEmbed(source: Window, requestedHeight: number): void {
-    const resolved = this.resolveEmbed(source);
-    if (!resolved) return;
-
-    const block = resolved.frame.closest<HTMLElement>('[data-type="NodeIFrame"]');
-    if (!block) return;
-
-    const height = Math.round(Math.max(42, Math.min(420, requestedHeight)));
-    const cssHeight = `${height}px`;
-
-    // NodeIFrame's inline height controls the space occupied in Protyle. The
-    // inner iframe must match it, but we intentionally do not persist this UI
-    // state through the kernel: resize remains a lazy, session-local operation.
-    if (block.style.height === cssHeight && resolved.frame.style.height === cssHeight) {
-      return;
-    }
-
-    block.style.height = cssHeight;
-    resolved.frame.style.height = cssHeight;
   }
 
   private rememberProtyle(contextId: AccessContextId, protyle: Protyle): void {
@@ -180,10 +161,18 @@ export class ProtyleContextRegistry {
     source: Window,
     frame: HTMLIFrameElement,
     contextId: AccessContextId,
-  ): ResolvedEmbed {
+  ): ResolvedEmbed | null {
+    const blockId = this.findEmbedBlockId(frame);
+    if (!blockId) return null;
+
     this.frameBySource.set(source, frame);
     this.contextBySource.set(source, contextId);
-    return { contextId, frame };
+    return { contextId, frame, blockId };
+  }
+
+  private findEmbedBlockId(frame: HTMLIFrameElement): string | null {
+    const block = frame.closest<HTMLElement>('[data-type="NodeIFrame"][data-node-id]');
+    return block?.dataset.nodeId ?? null;
   }
 
   private findOwnEmbedFrame(source: Window): HTMLIFrameElement | null {

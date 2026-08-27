@@ -57,6 +57,16 @@ export async function insertMarkdownBlock(
   return { id: operation.id, dom: operation.data ?? "" };
 }
 
+export async function getBlockAttrs(id: string): Promise<Record<string, string>> {
+  const data = await kernelPost<Record<string, unknown>>("/api/attr/getBlockAttrs", { id });
+  const attrs: Record<string, string> = {};
+
+  for (const [name, value] of Object.entries(data ?? {})) {
+    if (typeof value === "string") attrs[name] = value;
+  }
+  return attrs;
+}
+
 export async function setBlockAttrs(id: string, attrs: Record<string, string>): Promise<void> {
   await kernelPost("/api/attr/setBlockAttrs", { id, attrs });
 }
