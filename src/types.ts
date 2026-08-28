@@ -96,7 +96,7 @@ export type AuthorizationRevocationReason =
  * Capability revocation is intentionally distinct from ordinary Vault change.
  *
  * Document references are clients, not replicas of Vault state. Normal data
- * mutations never push a refresh into document iframes. Only an authorization
+ * mutations never push a refresh into document references. Only an authorization
  * boundary becoming invalid may proactively terminate an existing live session.
  */
 export type AuthorizationRevocation =

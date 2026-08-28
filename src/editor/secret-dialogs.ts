@@ -1,12 +1,12 @@
 import { Dialog, showMessage, type Protyle } from "siyuan";
 import type { AccessContextId, GroupId } from "../types";
 import type { VaultController } from "../vault";
-import type { ProtyleContextRegistry } from "./protyle-context";
-import type { SecretReferenceService, SlashTarget } from "./secret-reference";
+import type { EditorContextRegistry } from "../interaction/editor-context";
+import type { SecretReferenceService, SlashTarget } from "../reference/secret-reference";
 
 /**
  * Owns the imperative SiYuan dialogs used from editor slash commands and
- * explicit live embed sessions. Password prompts are single-flight per context +
+ * editor actions. Password prompts are single-flight per context +
  * group so several connected Secret frames cannot open duplicate dialogs.
  */
 export class SecretDialogs {
@@ -15,7 +15,7 @@ export class SecretDialogs {
   constructor(
     private readonly vault: VaultController,
     private readonly references: SecretReferenceService,
-    private readonly contexts: ProtyleContextRegistry,
+    private readonly contexts: EditorContextRegistry,
   ) {}
 
   requestUnlock(contextId: AccessContextId, groupId: GroupId): Promise<boolean> {

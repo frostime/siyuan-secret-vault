@@ -948,3 +948,155 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* v4 document references are ordinary SiYuan paragraphs. The plugin owns only
+ * presentation; no runtime node is mounted inside the semantic block DOM. */
+.protyle-wysiwyg [data-type="NodeParagraph"][custom-secret-vault="1"][custom-secret-version="4"] {
+  --secret-ref-border: color-mix(in srgb, var(--b3-theme-primary) 58%, var(--b3-border-color));
+  --secret-ref-bg: color-mix(in srgb, var(--b3-theme-surface) 86%, transparent);
+  --secret-ref-link: var(--b3-theme-primary);
+
+  border: 1px solid var(--secret-ref-border);
+  border-left-width: 3px;
+  border-radius: 7px;
+  background: var(--secret-ref-bg);
+  padding: 3px 8px;
+}
+
+.protyle-wysiwyg [data-type="NodeParagraph"][custom-secret-vault="1"][custom-secret-version="4"]
+  > [contenteditable="true"] > [data-type="a"] {
+  color: var(--secret-ref-link);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.protyle-wysiwyg [data-type="NodeParagraph"][custom-secret-vault="1"][custom-secret-version="4"]
+  > [contenteditable="true"] > [data-type="a"]:hover {
+  text-decoration: underline;
+}
+
+.secret-vault-popover-root {
+  position: fixed;
+  z-index: 211;
+  box-sizing: border-box;
+  max-width: calc(100vw - 20px);
+  max-height: calc(100vh - 20px);
+  overflow: auto;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 9px;
+  background: var(--b3-theme-background);
+  color: var(--b3-theme-on-background);
+  box-shadow: var(--b3-dialog-shadow);
+}
+
+.secret-popover-panel {
+  padding: 11px;
+}
+
+.secret-popover-header,
+.secret-popover-header-actions,
+.secret-popover-inline-row,
+.secret-popover-actions {
+  display: flex;
+  align-items: center;
+}
+
+.secret-popover-header {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.secret-popover-identity {
+  min-width: 0;
+}
+
+.secret-popover-identity strong {
+  display: block;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secret-popover-identity span {
+  display: block;
+  margin-top: 2px;
+  color: var(--b3-theme-on-surface);
+  font-size: 11px;
+}
+
+.secret-popover-header-actions {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.secret-popover-state {
+  font-size: 13px;
+}
+
+.secret-popover-close {
+  min-width: 28px;
+  padding: 2px 7px;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.secret-popover-unlock p {
+  margin: 2px 0 9px;
+  color: var(--b3-theme-on-surface);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.secret-popover-inline-row {
+  gap: 7px;
+}
+
+.secret-popover-content {
+  box-sizing: border-box;
+  min-height: 78px;
+  max-height: min(320px, 45vh);
+  margin: 0 0 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 6px;
+  background: var(--b3-theme-surface);
+  padding: 8px 9px;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.secret-popover-editor {
+  display: grid;
+  gap: 7px;
+}
+
+.secret-popover-textarea {
+  min-height: 140px;
+  max-height: 45vh;
+  resize: vertical;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.secret-popover-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.secret-popover-actions--end {
+  justify-content: flex-end;
+}
+
+.secret-popover-message {
+  margin-top: 8px;
+  color: var(--b3-theme-on-surface);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.secret-popover-message--error {
+  color: var(--b3-card-error-color);
+}

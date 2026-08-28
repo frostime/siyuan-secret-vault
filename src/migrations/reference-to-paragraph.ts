@@ -1,11 +1,11 @@
-import type { SecretReferenceService } from "../editor/secret-reference";
+import type { SecretReferenceService } from "../reference/secret-reference";
 import {
   getBlockAttrs,
   getBlockKramdown,
   querySql,
   setBlockAttrs,
   updateMarkdownBlock,
-} from "../editor/siyuan-api";
+} from "../siyuan/api";
 import type { VaultController } from "../vault";
 import type {
   MigrationPreview,
@@ -24,17 +24,16 @@ interface ReferenceRow {
 }
 
 /**
- * Explicit migration from legacy Secret Vault iframe references to v3 NodeWidget.
+ * Explicit v1/v2/v3 -> v4 migration.
  *
- * The task is deliberately user-triggered, sequential, and idempotent. A
- * partially migrated block whose markdown already became NodeWidget can be
- * completed on a later run because authoritative identity still lives in
- * custom-secret-id.
+ * The task never runs at startup. It keeps the original block ID, rewrites one
+ * block at a time, and verifies the persisted paragraph plus authoritative
+ * custom-secret-id before continuing to the next document.
  */
-export class DocumentReferenceToWidgetMigration implements MigrationTask {
-  readonly id = "document-reference-to-widget-v3";
-  readonly title = "文档引用迁移到挂件 v3";
-  readonly description = "将旧版 v1/v2 IFrame 引用原地转换为思源原生挂件块。迁移不会打开文档，且只在你明确执行时写入。";
+export class ReferenceToParagraphMigration implements MigrationTask {
+  readonly id = "document-reference-to-paragraph-v4";
+  readonly title = "文档引用迁移到普通段落 v4";
+  readonly description = "将旧版 IFrame / Widget 引用原地转换为普通段落 + 插件链接。迁移显式触发、串行执行，并保留原 block ID。";
 
   constructor(
     private readonly pluginName: string,
@@ -59,18 +58,15 @@ export class DocumentReferenceToWidgetMigration implements MigrationTask {
       AND COALESCE(
         (SELECT value FROM attributes WHERE block_id = b.id AND name = 'custom-secret-version' LIMIT 1),
         ''
-      ) <> '3'
+      ) <> '4'
       ORDER BY b.updated DESC
     `);
 
-    const items = rows.map((row) => this.classify(row));
-    return makePreview(this.id, items);
+    return makePreview(this.id, rows.map((row) => this.classify(row)));
   }
 
   async run(preview: MigrationPreview): Promise<MigrationRunResult> {
     if (preview.taskId !== this.id) throw new Error("迁移预览与当前任务不匹配，请重新扫描");
-
-    await this.references.ensureWidgetAvailable();
 
     const result: MigrationRunResult = {
       taskId: this.id,
@@ -94,12 +90,11 @@ export class DocumentReferenceToWidgetMigration implements MigrationTask {
           ok: false,
           message: error instanceof Error ? error.message : String(error),
         });
-        // A format/API mismatch is a system-level signal. Stop before repeating
-        // the same assumption across more documents.
+        // A format/API mismatch is likely systemic. Stop before repeating the
+        // same assumption across more user documents.
         break;
       }
     }
-
     return result;
   }
 
@@ -117,20 +112,8 @@ export class DocumentReferenceToWidgetMigration implements MigrationTask {
       return { ...base, label: null, status: "issue", note: "缺少 custom-secret-id，无法确定权威 Secret" };
     }
 
-    const currentIsWidget = this.references.isWidgetReferenceMarkdown(row.markdown ?? "");
-    if (!currentIsWidget && version === "1") {
-      const legacyId = parseLegacySecretId(row.markdown ?? "", this.pluginName);
-      if (!legacyId) {
-        return { ...base, label: null, status: "issue", note: "v1 块内容不是可识别的 Secret Vault IFrame" };
-      }
-      if (legacyId !== secretId) {
-        return { ...base, label: null, status: "issue", note: "块属性 Secret ID 与旧 IFrame URL 不一致，已拒绝猜测" };
-      }
-    }
-
-    if (!currentIsWidget && version !== "1" && version !== "2") {
-      return { ...base, label: null, status: "issue", note: `未知引用版本 ${version || "(空)"}，未自动迁移` };
-    }
+    const formatIssue = validateLegacyFormat(version, row.markdown ?? "", this.pluginName, secretId);
+    if (formatIssue) return { ...base, label: null, status: "issue", note: formatIssue };
 
     const secret = this.vault.getSecret(secretId);
     if (!secret) {
@@ -145,19 +128,15 @@ export class DocumentReferenceToWidgetMigration implements MigrationTask {
       ...base,
       label: secret.label,
       status: "ready",
-      note: currentIsWidget
-        ? "挂件内容已写入但版本属性未完成，可安全补全"
-        : `可从 v${version || "?"} 迁移为 NodeWidget v3`,
+      note: `可从 v${version} 原地迁移为普通段落 v4`,
     };
   }
 
   private async migrateOne(blockId: string): Promise<{ changed: boolean; message: string }> {
     const attrs = await getBlockAttrs(blockId);
-    if (attrs["custom-secret-vault"] !== "1") {
-      throw new Error("块已不再属于 Secret Vault");
-    }
-    if (attrs["custom-secret-version"] === "3") {
-      return { changed: false, message: "已经是 v3 挂件引用" };
+    if (attrs["custom-secret-vault"] !== "1") throw new Error("块已不再属于 Secret Vault");
+    if (attrs["custom-secret-version"] === "4") {
+      return { changed: false, message: "已经是 v4 普通段落引用" };
     }
 
     const secretId = normalizeId(attrs["custom-secret-id"]);
@@ -169,36 +148,28 @@ export class DocumentReferenceToWidgetMigration implements MigrationTask {
     if (!group) throw new Error("Secret 所属分组不存在");
 
     const currentMarkdown = await getBlockKramdown(blockId);
-    const alreadyWidget = this.references.isWidgetReferenceMarkdown(currentMarkdown);
     const version = normalizeVersion(attrs["custom-secret-version"]);
+    const formatIssue = validateLegacyFormat(version, currentMarkdown, this.pluginName, secretId);
+    if (formatIssue) throw new Error(formatIssue);
 
-    if (!alreadyWidget) {
-      if (version === "1") {
-        const legacyId = parseLegacySecretId(currentMarkdown, this.pluginName);
-        if (!legacyId) throw new Error("v1 块内容已变化，不再是可识别的 Secret Vault IFrame");
-        if (legacyId !== secretId) throw new Error("块属性与旧 IFrame Secret ID 已发生冲突");
-      } else if (version !== "2") {
-        throw new Error(`不支持从引用版本 ${version || "(空)"} 自动迁移`);
-      }
-    }
-
-    const definition = this.references.buildWidgetReference(secret, group.name, attrs.style ?? "");
-    if (!alreadyWidget) {
-      await updateMarkdownBlock(blockId, definition.markdown);
-    }
-    await setBlockAttrs(blockId, definition.attrs);
+    const definition = this.references.buildParagraphReference(secret, group.name);
+    await updateMarkdownBlock(blockId, definition.markdown);
+    await setBlockAttrs(blockId, {
+      ...definition.attrs,
+      style: removeLegacyHeight(attrs.style ?? ""),
+    });
 
     const [verifiedAttrs, verifiedMarkdown] = await Promise.all([
       getBlockAttrs(blockId),
       getBlockKramdown(blockId),
     ]);
-    if (verifiedAttrs["custom-secret-version"] !== "3"
+    if (verifiedAttrs["custom-secret-version"] !== "4"
       || verifiedAttrs["custom-secret-id"] !== secretId
-      || !this.references.isWidgetReferenceMarkdown(verifiedMarkdown)) {
-      throw new Error("v3 挂件引用验证失败；已停止后续写入，可重新扫描后重试");
+      || !this.references.isParagraphReferenceMarkdown(verifiedMarkdown, secretId)) {
+      throw new Error("v4 普通段落引用验证失败；已停止后续写入，可重新扫描后重试");
     }
 
-    return { changed: true, message: "已迁移为 NodeWidget v3" };
+    return { changed: true, message: `已从 v${version} 迁移为普通段落 v4` };
   }
 }
 
@@ -223,11 +194,36 @@ function normalizeVersion(value: string | null | undefined): string {
   return value?.trim() || "1";
 }
 
-function parseLegacySecretId(markdown: string, pluginName: string): string | null {
-  const html = markdown.replace(/\n?\{:[\s\S]*$/, "").trim();
-  const iframe = html.match(/<iframe\b[^>]*>/i)?.[0] ?? "";
-  if (!iframe) return null;
+function validateLegacyFormat(
+  version: string,
+  markdown: string,
+  pluginName: string,
+  secretId: string,
+): string | null {
+  if (version === "1") {
+    const legacyId = parseLegacySecretId(markdown, pluginName);
+    if (!legacyId) return "v1 块内容不是可识别的 Secret Vault IFrame";
+    if (legacyId !== secretId) return "块属性 Secret ID 与旧 IFrame URL 不一致，已拒绝猜测";
+    return null;
+  }
 
+  if (version === "2") {
+    return /<iframe\b/i.test(stripBlockIal(markdown))
+      ? null
+      : "v2 块内容已变化，不再是可识别的 IFrame 引用";
+  }
+
+  if (version === "3") {
+    return isLegacyWidget(markdown)
+      ? null
+      : "v3 块内容已变化，不再是可识别的 Secret Vault Widget";
+  }
+
+  return `未知引用版本 ${version || "(空)"}，未自动迁移`;
+}
+
+function parseLegacySecretId(markdown: string, pluginName: string): string | null {
+  const iframe = stripBlockIal(markdown).match(/<iframe\b[^>]*>/i)?.[0] ?? "";
   const srcMatch = iframe.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
   const src = srcMatch?.[1] ?? srcMatch?.[2] ?? srcMatch?.[3] ?? "";
   if (!src) return null;
@@ -239,4 +235,23 @@ function parseLegacySecretId(markdown: string, pluginName: string): string | nul
   } catch {
     return null;
   }
+}
+
+function isLegacyWidget(markdown: string): boolean {
+  const iframe = stripBlockIal(markdown).match(/<iframe\b[^>]*>/i)?.[0] ?? "";
+  return /data-subtype\s*=\s*["']widget["']/i.test(iframe)
+    && /\/widgets\/siyuan-secret-vault-widget/i.test(iframe);
+}
+
+function stripBlockIal(markdown: string): string {
+  return markdown.replace(/\n?\{:[\s\S]*$/, "").trim();
+}
+
+function removeLegacyHeight(style: string): string {
+  const declarations = style
+    .split(";")
+    .map((item) => item.trim())
+    .filter((item) => item && !/^height\s*:/i.test(item));
+
+  return declarations.length > 0 ? `${declarations.join("; ")};` : "";
 }

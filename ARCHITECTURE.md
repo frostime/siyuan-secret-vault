@@ -1,230 +1,227 @@
-# Secret Vault Architecture
+# Secret Vault Architecture — v4 document references
 
-## 1. Core ownership rule
+## 1. Design pressure
 
-The document owns every Secret reference block.
+The dominant failure mode is not ordinary Vault CPU cost. Previous IFrame and
+Widget references created an additional browsing context inside SiYuan's
+Protyle lifecycle. Even after removing polling, BroadcastChannel, automatic
+refresh, reconnect and dynamic resize, a document-resident iframe/widget still
+expanded the host interaction surface and could participate in renderer-level
+failure modes.
 
-A Secret reference is **not** a replica of Vault state and the Vault does not
-push ordinary data changes into document blocks. The block decides when to ask
-for Vault capabilities. The Vault owns only encrypted data, cryptographic keys,
-authorization, and capability revocation.
+Version 0.6.0 therefore removes document-resident runtime entirely.
+
+The architectural target is:
+
+```text
+open document
+  -> ordinary NodeParagraph
+  -> CSS presentation only
+  -> no Secret Vault execution
+
+explicit click
+  -> SiYuan click-editorcontent captures Protyle + anchor
+  -> open-siyuan-url-plugin confirms plugin-link intent
+  -> validate paragraph custom-secret-id
+  -> one plugin-owned non-modal popover
+  -> explicit Vault operations
+```
+
+## 2. Core ownership rule
+
+The document owns each persistent Secret reference. The Vault owns encrypted
+Secret data, cryptographic keys, context authorization and revocation.
 
 Allowed directions:
 
 ```text
-Document widget -> Vault request
-Vault -> live-session revocation
+explicit document click -> transient interaction -> Vault request
+Vault authorization boundary -> transient interaction revocation
 ```
 
-Forbidden direction:
+Forbidden directions:
 
 ```text
-Vault -> refresh/re-render/reconnect every document reference
+Vault -> refresh/re-render/reconnect all document references
+Vault -> install runtime into every reference block
+document open -> Secret decryption/request
 ```
 
-This rule removes the old global invalidation/BroadcastChannel ownership model.
+A Secret reference is a client pointer, not a replica of Vault state.
 
-## 2. Persistent document representation
+## 3. Persistent v4 representation
 
-Version 3 references use SiYuan's native `NodeWidget` representation:
+A v4 reference is an ordinary SiYuan `NodeParagraph`:
 
-```html
-<iframe src="/widgets/siyuan-secret-vault-widget" data-subtype="widget"></iframe>
+```markdown
+🔐 [Example Token](siyuan://plugins/siyuan-secret-vault/secret/sec_xxx) · default
 ```
 
-Block attributes contain the authoritative Secret identity plus non-authoritative
-presentation snapshots:
+Its block attributes are:
 
 ```text
 custom-secret-vault=1
-custom-secret-version=3
+custom-secret-version=4
 custom-secret-id=<authoritative Secret ID>
-custom-secret-group=<group ID snapshot>
+custom-secret-group=<group snapshot>
 custom-secret-label=<label snapshot>
 custom-secret-group-name=<group-name snapshot>
 custom-secret-created-at=<timestamp snapshot>
 custom-secret-updated-at=<timestamp snapshot>
 ```
 
-`custom-secret-id` is the only authoritative reference identity. Snapshot fields
-may be stale until a user explicitly reconnects or a future explicit snapshot
-maintenance task is run.
+`custom-secret-id` is the only authoritative Secret identity. The URL repeats
+that ID only for routing. Before interaction, URL identity and block-attribute
+identity must agree; conflicts fail closed.
 
-## 3. Bundled widget deployment
+The URL deliberately does not persist the SiYuan block ID. Copying a block gives
+it a new block ID, so persisting the old one would create identity drift.
 
-The plugin ships an internal widget package under:
+## 4. Dormant means no runtime
 
-```text
-public/bundled-widget/
-```
-
-At startup `BundledWidgetInstaller` checks:
+Opening a document containing v4 references performs no plugin work per
+reference. A v4 block has:
 
 ```text
-/data/widgets/siyuan-secret-vault-widget
+no iframe
+no widget
+no script
+no postMessage / MessageChannel / BroadcastChannel
+no timer
+no observer
+no polling
+no Vault request
+no CryptoKey
+no plaintext
 ```
 
-through SiYuan `/api/file/*` APIs. If the directory is missing, the plugin
-creates it and copies the bundled widget files. If the directory exists, the
-plugin only fills missing managed files and does not overwrite a complete
-installation.
+Presentation is a stylesheet rule matching `custom-secret-vault="1"` and
+`custom-secret-version="4"`. The plugin never mounts UI inside a semantic
+`[data-node-id]` block.
 
-This install-once policy is deliberate:
+## 5. Explicit interaction adapter
 
-- `data/widgets` is normal SiYuan workspace data and participates in sync;
-- two devices running different plugin versions must not continuously overwrite
-  the synchronized widget package with different local versions;
-- a future breaking widget update belongs in the explicit Migration Center, not
-  in a hidden startup rewrite.
-
-The widget is retained when the plugin is disabled or uninstalled because
-existing document blocks depend on it for their dormant presentation.
-
-## 4. Dormant widget state
-
-Loading a document creates a normal SiYuan `NodeWidget`. Its widget script only
-reads the containing block's snapshot attributes once and renders the dormant
-card.
-
-Dormant state does **not**:
-
-- send `postMessage`;
-- access the Vault;
-- start a timer;
-- poll;
-- observe DOM mutations;
-- open a MessageChannel;
-- refresh when Vault data changes;
-- reconnect when the plugin becomes ready.
-
-The only transition to a live Vault client is an explicit user click on
-`连接`.
-
-## 5. Explicit live session
-
-On explicit Connect:
+SiYuan 3.8.0 was probed directly. For an editor plugin link the observed event
+chain is:
 
 ```text
-NodeWidget
-  -> one window.postMessage(session:connect + transferred MessagePort)
-  -> EmbedSessionBroker validates source block/context/secret ID
-  -> dedicated MessagePort becomes the session transport
+click-editorcontent
+-> open-siyuan-url-plugin
 ```
 
-A live session owns:
+`open-link` does not participate in this plugin-link path. Preventing the
+original browser click does not suppress `open-siyuan-url-plugin`.
+
+Responsibilities are therefore intentionally asymmetric:
+
+- `click-editorcontent` captures the current Protyle, block ID and link geometry;
+- `open-siyuan-url-plugin` is the authoritative plugin-link intent;
+- a short-lived pending anchor correlates the two events;
+- no native document click listener is required in production.
+
+The pending anchor expires quickly and is never persisted.
+
+## 6. Plugin-owned non-modal popover
+
+At most one Secret popover exists. It is appended to `document.body`, uses
+`position: fixed`, has no backdrop, and does not modify Protyle block DOM.
+
+The popover owns only transient UI state:
 
 ```text
-sessionId
-secretId
-groupId
-contextId
-blockId
-source Window
-MessagePort
+password input while submitting
+plaintext view/edit buffer while authorized
+one anchor rectangle
+one Svelte component instance
 ```
 
-Normal operations are user-driven requests on that port:
+Supported explicit operations are:
 
 ```text
-secret:get-state
-secret:reveal
-secret:copy
-secret:update
-secret:lock-group
+unlock current group in current Protyle context
+view multi-line Secret content
+edit label/content
+copy content
+lock current group
+close
 ```
 
-There is no BroadcastChannel and no ordinary parent-to-child refresh command.
+Saving from a document popover first commits Vault data. It then explicitly
+refreshes the clicked paragraph's non-sensitive snapshot. A snapshot refresh
+failure does not roll back a successfully committed Secret; it is reported as a
+separate presentation warning.
 
-## 6. Capability revocation
+## 7. Authorization and revocation
 
-The one proactive parent-to-child action is revocation. Revocation is not UI
-synchronization; it terminates a capability previously granted by the Vault.
+`GroupAccessManager` remains the runtime owner of:
 
-Examples:
-
-```text
-idle timeout
-manual group lock
-context destruction
-vault reload after official sync
-password change
-group deletion
-secret deletion
-plugin unload
-```
-
-On revocation, the widget must immediately:
-
-```text
-wipe plaintext
-wipe edit buffers
-reject pending operations
-close MessagePort
-show disconnected state
-```
-
-It never auto-reconnects.
-
-## 7. Protyle context ownership
-
-`ProtyleContextRegistry` owns only:
-
-- `Protyle <-> AccessContextId` identity;
-- one-time resolution of an explicitly connecting `NodeWidget` source window to
-  its Protyle context and block ID;
-- context release when a Protyle is destroyed.
-
-It does not know Vault data and does not scan generic `NodeIFrame` references.
-Once the MessagePort session is established, no further DOM lookup is required.
-
-## 8. Vault and access ownership
-
-`VaultController` owns committed persistent Vault state and the single-writer
-mutation coordinator.
-
-`GroupAccessManager` owns:
-
-- runtime `CryptoKey` references;
-- context-scoped group authorization;
+- in-memory `CryptoKey` references;
+- Protyle-scoped group authorization;
 - 15-minute inactivity timers;
 - terminal context release.
 
-Persistent mutations remain serialized over the complete clone -> crypto ->
-persist -> commit lifecycle. `this.data` always represents the last successfully
-persisted Vault snapshot.
+Revocation reasons include idle timeout, manual lock, context destruction,
+Vault reload after official sync, password change, group/Secret deletion and
+plugin unload.
 
-## 9. Migration Center
+If a revocation matches the active popover, the popover is immediately
+unmounted. No automatic reconnect exists.
 
-Plugin startup never scans or rewrites user documents.
+## 8. Vault consistency
 
-The Vault tab contains a permanent `数据与迁移` section. Version 0.5.0 exposes an
-explicit migration task that converts v1/v2 Secret Vault generic IFrame blocks
-to v3 `NodeWidget` blocks.
+`VaultController` owns the last committed encrypted Vault state.
+`VaultMutationCoordinator` serializes the complete staged mutation lifecycle:
 
-Migration properties:
+```text
+clone -> crypto -> Plugin.saveData -> commit in memory
+```
+
+Readers therefore never observe a half-committed password/KDF/ciphertext
+mutation. Passwords are never persisted; derived `CryptoKey` objects remain in
+memory only.
+
+## 9. SiYuan boundary
+
+Persistent document writes use SiYuan kernel APIs. Plugin data uses
+`Plugin.loadData` / `Plugin.saveData`.
+
+The plugin does not:
+
+- directly edit `.sy` files;
+- use Node/Electron filesystem access for workspace data;
+- use MutationObserver to watch Protyle;
+- scan all document references during normal runtime;
+- perform runtime block-height synchronization.
+
+## 10. Explicit migration
+
+Startup never scans or rewrites user documents.
+
+The permanent **数据与迁移** section exposes a v1/v2/v3 -> v4 task:
+
+```text
+v1 generic IFrame ----\
+v2 dormant IFrame -----+-> v4 NodeParagraph
+v3 native NodeWidget --/
+```
+
+Migration rules:
 
 - scan is read-only;
 - execution is explicitly user-triggered;
 - blocks are processed serially;
 - `custom-secret-id` remains authoritative;
-- v1 URL identity is used only as a consistency check;
-- conflicts fail closed instead of guessing;
+- v1 URL identity is only a consistency check;
+- unknown/conflicting formats fail closed;
 - original block IDs are retained;
-- each converted block is re-read and verified;
-- partial `markdown updated / attrs not updated` cases are retryable.
+- legacy fixed height is removed while unrelated style declarations are kept;
+- every converted block is re-read and verified;
+- a system-level format/API mismatch stops the remaining batch.
 
-Legacy `/plugins/siyuan-secret-vault/embed/index.html` is kept only as a zero-JS
-migration notice. It no longer connects to the Vault.
-
-## 10. Height capability
-
-`src/editor/secret-block-height.ts` contains the optional kernel-owned block
-height capability. It uses block attributes and never mutates Protyle DOM.
-
-The runtime integration edge is intentionally disconnected in 0.5.0. New v3
-references receive one fixed initial height. Re-enabling dynamic height later
-must be an explicit architecture decision and should use the isolated module,
-not DOM measurement feedback spread across widget/session/Vault code.
+The legacy `/plugins/siyuan-secret-vault/embed/index.html` is retained only as a
+zero-JS migration notice for old IFrame documents. Existing workspace widget
+files are not deleted automatically because old v3 documents may still depend
+on them until the user finishes migration.
 
 ## 11. Module ownership
 
@@ -233,29 +230,49 @@ src/vault.ts
   committed encrypted Vault state and persistent mutation orchestration
 
 src/access.ts
-  runtime authorization, CryptoKey lifetime, inactivity timers
+  runtime CryptoKey lifetime, context authorization and idle timers
 
 src/mutation-coordinator.ts
   global single-writer persistent mutation order
 
-src/editor/secret-reference.ts
-  canonical v3 NodeWidget reference representation and insertion
+src/reference/secret-reference.ts
+  canonical v4 paragraph/link/attribute format, insertion and verification
 
-src/widget/bundled-widget-installer.ts
-  install-once deployment of the document-owned widget package
+src/interaction/editor-context.ts
+  Protyle <-> AccessContextId identity and insertion target tracking
 
-src/editor/protyle-context.ts
-  Protyle/context identity and one-time NodeWidget source resolution
+src/interaction/secret-interaction.ts
+  plugin-link event correlation, reference validation and popover lifecycle
 
-src/embed/broker.ts + protocol.ts
-  explicit live sessions and capability revocation
+src/interaction/SecretPopover.svelte
+  transient unlock/view/edit/copy UI only
 
-src/migrations/document-reference-to-widget.ts
-  explicit v1/v2 -> v3 document migration
+src/editor/secret-dialogs.ts
+  slash-command create/picker flows; not document-reference runtime
 
-public/bundled-widget/*
-  dormant presentation and explicit live client
+src/siyuan/api.ts
+  small typed kernel HTTP boundary used by reference/migration code
 
-public/embed/index.html
-  zero-JS legacy migration notice only
+src/migrations/reference-to-paragraph.ts
+  explicit v1/v2/v3 -> v4 migration policy
+
+src/ui/VaultApp.svelte
+  full Vault workspace and Migration Center
 ```
+
+## 12. Deliberate YAGNI cuts
+
+0.6.0 intentionally does not build:
+
+- a generic popover framework;
+- runtime reference synchronization;
+- automatic reference snapshot maintenance;
+- per-reference lifecycle objects;
+- a kernel plugin;
+- dynamic reference height management;
+- document-wide DOM observers;
+- compatibility MessageChannel/Broker layers;
+- automatic deletion of legacy widget files.
+
+These cuts keep the normal document-open path equivalent to an ordinary
+paragraph plus CSS, which is the primary reliability objective of this version.

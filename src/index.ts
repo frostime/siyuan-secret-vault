@@ -6,17 +6,15 @@ import {
   type Protyle,
 } from "siyuan";
 import { mount, unmount } from "svelte";
-import { EmbedSessionBroker } from "./embed/broker";
-import { ProtyleContextRegistry } from "./editor/protyle-context";
-// import { SecretBlockHeightController } from "./editor/secret-block-height";
+import { EditorContextRegistry } from "./interaction/editor-context";
+import { SecretInteractionController } from "./interaction/secret-interaction";
 import { SecretDialogs } from "./editor/secret-dialogs";
-import { SecretReferenceService } from "./editor/secret-reference";
-import { DocumentReferenceToWidgetMigration } from "./migrations/document-reference-to-widget";
+import { ReferenceToParagraphMigration } from "./migrations/reference-to-paragraph";
 import type { MigrationTask } from "./migrations/types";
+import { SecretReferenceService } from "./reference/secret-reference";
 import { VAULT_CONTEXT_ID } from "./types";
 import VaultApp from "./ui/VaultApp.svelte";
 import { VaultController } from "./vault";
-import { BundledWidgetInstaller } from "./widget/bundled-widget-installer";
 import "./index.scss";
 
 const TAB_TYPE = "secret-vault";
@@ -27,76 +25,40 @@ type SvelteApp = ReturnType<typeof mount>;
 /** Composition root for SiYuan lifecycle and integration points. */
 export default class SecretVaultPlugin extends Plugin {
   private vault!: VaultController;
-  private contexts!: ProtyleContextRegistry;
+  private contexts!: EditorContextRegistry;
   private references!: SecretReferenceService;
-  private widgetInstaller!: BundledWidgetInstaller;
   private dialogs!: SecretDialogs;
+  private interactions: SecretInteractionController | null = null;
   private migrationTasks: MigrationTask[] = [];
-  private broker: EmbedSessionBroker | null = null;
 
   async onload(): Promise<void> {
     this.addSecretVaultIcon();
 
     this.vault = new VaultController(this);
-    this.contexts = new ProtyleContextRegistry();
-    this.widgetInstaller = new BundledWidgetInstaller(this.name);
-    this.references = new SecretReferenceService(this.widgetInstaller);
+    this.contexts = new EditorContextRegistry();
+    this.references = new SecretReferenceService(this.name);
     this.dialogs = new SecretDialogs(this.vault, this.references, this.contexts);
     this.migrationTasks = [
-      new DocumentReferenceToWidgetMigration(this.name, this.vault, this.references),
+      new ReferenceToParagraphMigration(this.name, this.vault, this.references),
     ];
 
-    // Register UI/editor integrations before the first await. SiYuan may restore
-    // tabs and Protyles while plugin data is still loading.
+    // Register SiYuan-owned UI hooks synchronously. No document reference runs
+    // plugin code merely because its document was opened.
     this.registerVaultTab();
     this.registerEditorEvents();
     this.registerSlashCommands();
 
-    // Install the document-owned widget package through SiYuan's file API.
-    // This is intentionally install-once: a complete existing widget directory
-    // is left untouched so synced workspaces do not oscillate between plugin
-    // versions on different devices.
-    void this.widgetInstaller.ensureInstalled().catch((error) => {
-      console.error("[secret-vault] failed to install bundled widget", error);
-      showMessage(`秘密库挂件安装失败：${error instanceof Error ? error.message : String(error)}`);
-    });
+    await this.vault.initialize();
 
-    // Install the handshake listener before awaiting plugin data. Widget
-    // references still do nothing until the user clicks Connect; this only
-    // prevents that explicit click from being lost during a slow startup.
-    const vaultReady = this.vault.initialize();
-
-    this.broker = new EmbedSessionBroker(this.vault, {
-      resolveSessionSource: async (source, secretId) => {
-        const resolved = this.contexts.resolveEmbed(source);
-        if (!resolved) return null;
-        if (!(await this.references.matchesReference(resolved.blockId, secretId))) return null;
-
-        try {
-          this.vault.activateContext(resolved.contextId);
-          return { contextId: resolved.contextId, blockId: resolved.blockId };
-        } catch {
-          // A late explicit connect from a Protyle already torn down must not
-          // resurrect its released access context.
-          return null;
-        }
-      },
-      requestUnlock: (contextId, groupId) => this.dialogs.requestUnlock(contextId, groupId),
-    }, vaultReady);
-    this.broker.start();
-
-    // Optional kernel-owned height capability is implemented and type-checked
-    // in editor/secret-block-height.ts, but intentionally disconnected in 0.5.0.
-    // const blockHeights = new SecretBlockHeightController();
-    // (No live-session presentation edge is wired to blockHeights yet.)
-
-    try {
-      await vaultReady;
-    } catch (error) {
-      this.broker.dispose();
-      this.broker = null;
-      throw error;
-    }
+    // The transient interaction adapter is global to the plugin, not one per
+    // reference. It reacts only after an explicit click on our plugin link.
+    this.interactions = new SecretInteractionController(
+      this,
+      this.vault,
+      this.references,
+      this.contexts,
+    );
+    this.interactions.start();
   }
 
   onLayoutReady(): void {
@@ -111,26 +73,21 @@ export default class SecretVaultPlugin extends Plugin {
 
   onunload(): void {
     this.unregisterEditorEvents();
-
-    // Broker disposal revokes only sessions that were explicitly connected.
-    // Dormant document references are inert and are not contacted at all.
-    this.broker?.dispose();
-    this.broker = null;
+    this.interactions?.dispose();
+    this.interactions = null;
     this.vault?.dispose();
   }
 
   uninstall(): void {
-    // Vault data is intentionally retained. Uninstalling for troubleshooting or
-    // reinstalling the same plugin must not implicitly destroy encrypted user
-    // data, the deployed document widget, or document references. Existing
-    // NodeWidget blocks depend on that widget for dormant rendering. Permanent
-    // data/widget cleanup should be an explicit maintenance action, not a plugin
-    // lifecycle side effect.
+    // Encrypted Vault data and document references are user data. Plugin
+    // uninstall/reinstall must not silently destroy either one. Legacy widget
+    // files from pre-v4 references are likewise not deleted automatically;
+    // document migration/cleanup remains an explicit maintenance operation.
   }
 
   async onDataChanged(): Promise<void> {
     await this.vault.reloadFromStorage();
-    showMessage("秘密库同步数据已更新；运行中的 Secret 会话已断开，分组授权已清除");
+    showMessage("秘密库同步数据已更新；运行中的明文交互已关闭，分组授权已清除");
   }
 
   private addSecretVaultIcon(): void {
