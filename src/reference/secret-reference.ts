@@ -28,6 +28,11 @@ export interface SlashTarget {
   cleanupBlockId: string | null;
 }
 
+export interface ParagraphReferenceClipboardPayload {
+  html: string;
+  plainText: string;
+}
+
 export interface ParsedSecretLink {
   secretId: string;
   url: string;
@@ -62,14 +67,6 @@ export class SecretReferenceService {
     };
   }
 
-  async insertAtCaret(
-    secret: SecretReferenceSource,
-    groupName: string,
-    protyle: Protyle,
-  ): Promise<void> {
-    await this.insert(secret, groupName, this.resolveEditorInsertionTarget(protyle), null);
-  }
-
   async insertFromSlash(
     secret: SecretReferenceSource,
     groupName: string,
@@ -96,6 +93,69 @@ export class SecretReferenceService {
         "custom-secret-updated-at": String(secret.updatedAt),
       },
     };
+  }
+
+  buildClipboardPayload(
+    secret: SecretReferenceSource,
+    groupName: string,
+  ): ParagraphReferenceClipboardPayload {
+    // The clipboard block ID is transport identity only. It is deliberately
+    // never persisted into Vault data. SiYuan remaps it when the same payload
+    // is pasted repeatedly.
+    const definition = this.buildParagraphReference(secret, groupName);
+    const blockId = createTransientBlockId();
+    const updated = formatSiYuanTimestamp(new Date());
+    const attrs = serializeHtmlAttrs(definition.attrs);
+
+    const label = escapeHtml(secret.label);
+    const group = escapeHtml(groupName);
+    const url = escapeHtml(this.buildSecretUrl(secret.id));
+
+    // SiYuan recognizes a native block clipboard payload through the
+    // data-siyuan comment. Our SiYuan 3.8.0 probe confirmed that a valid
+    // data-node-id is required for custom-* attributes to survive paste.
+    const blockDom =
+      `<div data-node-id="${blockId}" data-node-index="1" data-type="NodeParagraph" class="p protyle-wysiwyg--select" updated="${updated}" ${attrs}>`
+      + `<div contenteditable="true" spellcheck="false">🔐 <span data-type="a" data-href="${url}">${label}</span> · ${group}</div>`
+      + `<div class="protyle-attr" contenteditable="false">\u200B</div>`
+      + `</div>`;
+
+    const dataSiyuan = encodeUtf8Base64(blockDom);
+
+    return {
+      plainText: definition.markdown,
+      html:
+        `<!--data-siyuan='${dataSiyuan}'-->`
+        + `<p id="${blockId}" updated="${updated}" ${attrs}>`
+        + `🔐 <a href="${url}">${label}</a> · ${group}`
+        + `</p>`,
+    };
+  }
+
+  async copyToClipboard(
+    secret: SecretReferenceSource,
+    groupName: string,
+  ): Promise<void> {
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+      throw new Error("当前环境不支持复制 SiYuan 文档块");
+    }
+
+    const payload = this.buildClipboardPayload(secret, groupName);
+
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        "text/html": new Blob(
+          [payload.html],
+          { type: "text/html" },
+        ),
+        "text/plain": new Blob(
+          [payload.plainText],
+          { type: "text/plain" },
+        ),
+      }),
+    ]);
+
+    showMessage(`已复制为文档块：${secret.label}`);
   }
 
   buildSecretUrl(secretId: string): string {
@@ -215,6 +275,55 @@ export class SecretReferenceService {
       console.warn("[secret-vault] failed to clean slash source block", blockId, error);
     }
   }
+}
+
+function createTransientBlockId(): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(7));
+
+  let suffix = "";
+  for (const byte of bytes) {
+    suffix += alphabet[byte % alphabet.length];
+  }
+
+  return `${formatSiYuanTimestamp(new Date())}-${suffix}`;
+}
+
+function formatSiYuanTimestamp(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+
+  return `${date.getFullYear()}`
+    + `${pad(date.getMonth() + 1)}`
+    + `${pad(date.getDate())}`
+    + `${pad(date.getHours())}`
+    + `${pad(date.getMinutes())}`
+    + `${pad(date.getSeconds())}`;
+}
+
+function serializeHtmlAttrs(attrs: Record<string, string>): string {
+  return Object.entries(attrs)
+    .map(([name, value]) => `${name}="${escapeHtml(value)}"`)
+    .join(" ");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function encodeUtf8Base64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+
+  return btoa(binary);
 }
 
 function stripBlockIal(markdown: string): string {

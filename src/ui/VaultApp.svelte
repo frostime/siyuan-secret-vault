@@ -11,12 +11,12 @@
   let {
     vault,
     contextId,
-    insertSecret,
+    copySecretReference,
     migrationTasks,
   } = $props<{
     vault: VaultController;
     contextId: AccessContextId;
-    insertSecret: (secretId: string) => Promise<void>;
+    copySecretReference: (secretId: string) => Promise<void>;
     migrationTasks: MigrationTask[];
   }>();
 
@@ -271,9 +271,9 @@
     showMessage(`已复制：${selectedSecret.label}`);
   }
 
-  async function insertSelectedSecret() {
+  async function copySelectedSecretReference() {
     if (!selectedSecret) return;
-    await run(() => insertSecret(selectedSecret.id));
+    await run(() => copySecretReference(selectedSecret.id));
   }
 
   async function removeSelectedSecret() {
@@ -592,13 +592,13 @@
               class="vault-quiet-button"
               disabled={!selectedGroup?.unlocked || busy}
               onclick={copySelectedSecret}
-            >复制</button>
+            >复制内容</button>
 
             <button
               class="vault-quiet-button"
               disabled={busy}
-              onclick={insertSelectedSecret}
-            >插入文档</button>
+              onclick={copySelectedSecretReference}
+            >复制为文档块</button>
 
             <button
               class="vault-danger-link vault-detail-delete"

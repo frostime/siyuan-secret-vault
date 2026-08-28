@@ -113,7 +113,7 @@ export default class SecretVaultPlugin extends Plugin {
           props: {
             vault: plugin.vault,
             contextId: VAULT_CONTEXT_ID,
-            insertSecret: (secretId: string) => plugin.insertSecretFromVault(secretId),
+            copySecretReference: (secretId: string) => plugin.copySecretReference(secretId),
             migrationTasks: plugin.migrationTasks,
           },
         });
@@ -215,15 +215,13 @@ export default class SecretVaultPlugin extends Plugin {
     });
   }
 
-  private async insertSecretFromVault(secretId: string): Promise<void> {
-    const protyle = this.contexts.getTargetProtyle();
-    if (!protyle) throw new Error("没有可插入的文档编辑器，请先打开一个文档");
-
+  private async copySecretReference(secretId: string): Promise<void> {
     const secret = this.vault.getSecret(secretId);
     if (!secret) throw new Error("秘密不存在");
+
     const group = this.vault.getGroup(secret.groupId);
     if (!group) throw new Error("秘密所属分组不存在");
 
-    await this.references.insertAtCaret(secret, group.name, protyle);
+    await this.references.copyToClipboard(secret, group.name);
   }
 }
