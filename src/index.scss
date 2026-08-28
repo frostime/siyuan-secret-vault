@@ -1,3 +1,75 @@
+/* Secret Vault design tokens.
+ *
+ * Text sizes deliberately use em instead of fixed px values. The plugin UI
+ * therefore follows SiYuan's current inherited interface font size.
+ *
+ * Keep these variables at :root because Dialog and the anchored popover are
+ * mounted outside .secret-vault-tab.
+ */
+:root {
+  /* Typography: keep the entire plugin on three semantic text sizes. */
+  --sv-text-small: .86em;
+  --sv-text-normal: 1em;
+  --sv-text-large: 1.4em;
+
+  --sv-weight-medium: 550;
+  --sv-weight-strong: 650;
+
+  --sv-leading-tight: 1.35;
+  --sv-leading-normal: 1.5;
+  --sv-leading-relaxed: 1.6;
+
+  /* Reusable geometry. */
+  --sv-radius-small: 6px;
+  --sv-radius-normal: 8px;
+  --sv-radius-large: 10px;
+  --sv-radius-pill: 999px;
+
+  /* Reusable theme surfaces. */
+  --sv-border: 1px solid var(--b3-border-color);
+  --sv-divider: color-mix(
+    in srgb,
+    var(--b3-border-color) 68%,
+    transparent
+  );
+
+  --sv-surface-soft: color-mix(
+    in srgb,
+    var(--b3-theme-surface, var(--b3-theme-background)) 56%,
+    var(--b3-theme-background)
+  );
+
+  --sv-active-background: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 9%,
+    var(--b3-theme-background)
+  );
+
+  --sv-active-border: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 18%,
+    transparent
+  );
+
+  --sv-danger-color: var(--b3-card-error-color, #c33);
+  --sv-danger-background:
+    var(--b3-card-error-background, rgba(200, 0, 0, .08));
+}
+
+/* Plugin-owned UI follows SiYuan's interface font.
+ *
+ * Deliberately do NOT include the v4 document Paragraph selector here:
+ * document references must inherit the editor/document font instead.
+ */
+.secret-vault-tab,
+.secret-vault-popover-root,
+.secret-vault-picker,
+.secret-vault-create-inline,
+.vault-modal {
+  font-family: var(--b3-font-family);
+  font-size: var(--sv-text-normal);
+}
+
 .secret-vault-tab {
   height: 100%;
   overflow: hidden;
@@ -55,8 +127,8 @@
   min-width: 0;
   gap: 7px;
   padding: 0 5px;
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--sv-text-normal);
+  font-weight: var(--sv-weight-strong);
   letter-spacing: -.01em;
 }
 
@@ -134,16 +206,8 @@
 }
 
 .vault-group.active {
-  border-color: color-mix(
-    in srgb,
-    var(--b3-theme-primary) 18%,
-    transparent
-  );
-  background: color-mix(
-    in srgb,
-    var(--b3-theme-primary) 9%,
-    var(--b3-theme-background)
-  );
+  border-color: var(--sv-active-border);
+  background: var(--sv-active-background);
 }
 
 .vault-group.active::before {
@@ -163,8 +227,8 @@
 
 .vault-group-name {
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 560;
+  font-size: var(--sv-text-normal);
+  font-weight: var(--sv-weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -174,7 +238,7 @@
   align-items: center;
   gap: 4px;
   color: var(--b3-theme-on-surface, var(--b3-theme-on-background));
-  font-size: 11px;
+  font-size: var(--sv-text-small);
   opacity: .58;
 }
 
@@ -185,8 +249,8 @@
 .vault-inline-card {
   margin-top: 10px;
   padding: 9px;
-  border: 1px solid var(--b3-border-color);
-  border-radius: 8px;
+  border: var(--sv-border);
+  border-radius: var(--sv-radius-normal);
   background: var(--b3-theme-background);
 }
 
@@ -200,7 +264,7 @@
 .vault-modal label {
   display: grid;
   gap: 5px;
-  font-size: 12px;
+  font-size: var(--sv-text-small);
 }
 
 .vault-inline-actions,
@@ -211,8 +275,8 @@
 
 .vault-quiet-button {
   padding: 5px 8px;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--sv-radius-small);
+  font-size: var(--sv-text-small);
 }
 
 .vault-secrets {
@@ -234,18 +298,18 @@
 .vault-list-title-row h2 {
   display: inline;
   margin: 0;
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--sv-text-normal);
+  font-weight: var(--sv-weight-strong);
 }
 
 .vault-status-badge {
   display: inline-flex;
   margin-left: 6px;
   padding: 1px 6px;
-  border-radius: 999px;
+  border-radius: var(--sv-radius-pill);
   background: var(--b3-theme-surface, var(--b3-list-hover));
-  font-size: 10px;
-  line-height: 18px;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-normal);
   opacity: .68;
   vertical-align: 1px;
 }
@@ -305,8 +369,8 @@
   min-width: 0;
   overflow: hidden;
   flex: 1;
-  font-size: 13px;
-  font-weight: 520;
+  font-size: var(--sv-text-normal);
+  font-weight: var(--sv-weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -319,7 +383,7 @@
 .vault-empty-list {
   padding: 30px 12px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--sv-text-small);
   opacity: .5;
 }
 
@@ -330,8 +394,8 @@
 
 .vault-danger-link {
   padding: 4px 0;
-  color: var(--b3-card-error-color, #c33);
-  font-size: 11px;
+  color: var(--sv-danger-color);
+  font-size: var(--sv-text-small);
   opacity: .72;
 }
 
@@ -366,8 +430,8 @@
 .vault-eyebrow,
 .vault-section-label {
   color: var(--b3-theme-on-surface, var(--b3-theme-on-background));
-  font-size: 10px;
-  font-weight: 650;
+  font-size: var(--sv-text-small);
+  font-weight: var(--sv-weight-strong);
   letter-spacing: .08em;
   text-transform: uppercase;
   opacity: .55;
@@ -376,8 +440,8 @@
 .vault-detail-header h1 {
   margin: 4px 0 0;
   overflow-wrap: anywhere;
-  font-size: clamp(20px, 2.2vw, 28px);
-  font-weight: 680;
+  font-size: var(--sv-text-large);
+  font-weight: var(--sv-weight-strong);
   letter-spacing: -.025em;
 }
 
@@ -411,9 +475,9 @@
 .vault-locked-content,
 .vault-content-placeholder {
   margin: 8px 0 0;
-  border: 1px solid var(--b3-border-color);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--b3-theme-surface, var(--b3-theme-background)) 56%, var(--b3-theme-background));
+  border: var(--sv-border);
+  border-radius: var(--sv-radius-normal);
+  background: var(--sv-surface-soft);
 }
 
 .vault-content-view {
@@ -423,13 +487,16 @@
   padding: 13px 14px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: 13px/1.55 var(--b3-font-family-code);
+  font:
+    var(--sv-text-normal) /
+    var(--sv-leading-relaxed)
+    var(--b3-font-family-code);
 }
 
 .vault-content-placeholder {
   padding: 30px 14px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--sv-text-small);
   opacity: .55;
 }
 
@@ -445,14 +512,14 @@
 }
 
 .vault-locked-content strong {
-  font-size: 13px;
+  font-size: var(--sv-text-normal);
 }
 
 .vault-locked-content p {
   max-width: 560px;
   margin: 4px 0 0;
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-relaxed);
   opacity: .58;
 }
 
@@ -474,7 +541,7 @@
 .vault-metadata dt,
 .vault-metadata dd {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--sv-text-small);
 }
 
 .vault-metadata dt {
@@ -506,7 +573,7 @@
 }
 
 .vault-detail-empty span {
-  font-size: 12px;
+  font-size: var(--sv-text-small);
 }
 
 .vault-editor-form {
@@ -531,18 +598,18 @@
 }
 
 .vault-muted {
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-relaxed);
   opacity: .62;
 }
 
 .vault-error {
   margin-top: 12px;
   padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--b3-card-error-background, rgba(200, 0, 0, .08));
-  color: var(--b3-card-error-color, inherit);
-  font-size: 12px;
+  border-radius: var(--sv-radius-small);
+  background: var(--sv-danger-background);
+  color: var(--sv-danger-color);
+  font-size: var(--sv-text-small);
 }
 
 .vault-modal-backdrop {
@@ -559,15 +626,16 @@
   max-height: min(720px, calc(100vh - 50px));
   overflow: auto;
   padding: 18px;
-  border: 1px solid var(--b3-border-color);
-  border-radius: 10px;
+  border: var(--sv-border);
+  border-radius: var(--sv-radius-large);
   background: var(--b3-theme-background);
   box-shadow: var(--b3-dialog-shadow);
 }
 
 .vault-modal h3 {
   margin: 0 0 6px;
-  font-size: 16px;
+  font-size: var(--sv-text-normal);
+  font-weight: var(--sv-weight-strong);
 }
 
 .vault-modal label {
@@ -602,15 +670,15 @@
 
 .secret-vault-picker__intro strong {
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 620;
+  font-size: var(--sv-text-normal);
+  font-weight: var(--sv-weight-strong);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .secret-vault-picker__count {
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-tight);
   opacity: .52;
 }
 
@@ -644,8 +712,8 @@
 .secret-vault-picker__list {
   max-height: min(52vh, 460px);
   overflow: auto;
-  border: 1px solid var(--b3-border-color);
-  border-radius: 8px;
+  border: var(--sv-border);
+  border-radius: var(--sv-radius-normal);
   background: var(--b3-theme-background);
   overscroll-behavior: contain;
 }
@@ -688,8 +756,8 @@
 .secret-vault-picker__item-label {
   min-width: 0;
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 560;
+  font-size: var(--sv-text-normal);
+  font-weight: var(--sv-weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -698,14 +766,14 @@
   max-width: 150px;
   overflow: hidden;
   padding: 2px 7px;
-  border-radius: 999px;
+  border-radius: var(--sv-radius-pill);
   background: color-mix(
     in srgb,
     var(--b3-theme-surface) 72%,
     transparent
   );
-  font-size: 10px;
-  line-height: 18px;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-normal);
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: .68;
@@ -726,9 +794,9 @@
 .secret-vault-picker__empty {
   padding: 36px 12px;
   border: 1px dashed var(--b3-border-color);
-  border-radius: 8px;
+  border-radius: var(--sv-radius-normal);
   text-align: center;
-  font-size: 12px;
+  font-size: var(--sv-text-small);
   opacity: .55;
 }
 
@@ -768,8 +836,8 @@
 }
 
 .secret-vault-create-inline__hint {
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-normal);
   opacity: .65;
 }
 
@@ -814,8 +882,9 @@
   }
 
   .vault-group-list {
-    display: flex;
+    flex-direction: row;
     overflow-x: auto;
+    overflow-y: hidden;
     padding-bottom: 3px;
   }
 
@@ -863,8 +932,8 @@
 
 .vault-nav-section-label {
   padding: 4px 9px 6px;
-  font-size: 9px;
-  font-weight: 700;
+  font-size: var(--sv-text-small);
+  font-weight: var(--sv-weight-strong);
   letter-spacing: .09em;
   opacity: .42;
 }
@@ -884,7 +953,7 @@
   color: inherit;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--sv-text-small);
   opacity: .68;
 }
 
@@ -923,16 +992,16 @@
 
 .vault-migration-header h1 {
   margin: 5px 0 0;
-  font-size: clamp(20px, 2.2vw, 27px);
-  font-weight: 680;
+  font-size: var(--sv-text-large);
+  font-weight: var(--sv-weight-strong);
   letter-spacing: -.025em;
 }
 
 .vault-migration-header p {
   max-width: 650px;
   margin: 8px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-relaxed);
   opacity: .6;
 }
 
@@ -953,18 +1022,18 @@
 }
 
 .vault-migration-summary strong {
-  font-size: 21px;
-  font-weight: 650;
+  font-size: var(--sv-text-large);
+  font-weight: var(--sv-weight-strong);
   font-variant-numeric: tabular-nums;
 }
 
 .vault-migration-summary span {
-  font-size: 10px;
+  font-size: var(--sv-text-small);
   opacity: .5;
 }
 
 .vault-migration-summary .warn strong {
-  color: var(--b3-card-error-color, #c33);
+  color: var(--sv-danger-color);
 }
 
 .vault-migration-actions {
@@ -978,7 +1047,7 @@
 }
 
 .vault-migration-actions > span {
-  font-size: 11px;
+  font-size: var(--sv-text-small);
   opacity: .5;
 }
 
@@ -1020,7 +1089,7 @@
   align-items: center;
   gap: 7px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--sv-text-normal);
 }
 
 .vault-migration-item-title strong {
@@ -1049,7 +1118,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: var(--sv-text-small);
   opacity: .48;
 }
 
@@ -1060,10 +1129,10 @@
 .vault-block-id {
   flex: 0 0 auto;
   padding: 4px 7px;
-  border-radius: 5px;
+  border-radius: var(--sv-radius-small);
   color: inherit;
   text-decoration: none;
-  font-size: 10px;
+  font-size: var(--sv-text-small);
   opacity: .54;
 }
 
@@ -1073,16 +1142,20 @@
 .vault-migration-result {
   margin-top: 18px;
   padding: 16px;
-  border: 1px solid var(--b3-border-color);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--b3-theme-surface, var(--b3-theme-background)) 48%, var(--b3-theme-background));
-  font-size: 12px;
+  border: var(--sv-border);
+  border-radius: var(--sv-radius-normal);
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-surface, var(--b3-theme-background)) 48%,
+    var(--b3-theme-background)
+  );
+  font-size: var(--sv-text-small);
 }
 
 .vault-migration-intro p {
   max-width: 680px;
   margin: 6px 0 0;
-  line-height: 1.6;
+  line-height: var(--sv-leading-relaxed);
   opacity: .58;
 }
 
@@ -1104,7 +1177,7 @@
   margin-top: 30px;
   padding-top: 14px;
   border-top: 1px solid var(--b3-border-color);
-  font-size: 10px;
+  font-size: var(--sv-text-small);
   opacity: .42;
 }
 
@@ -1153,8 +1226,8 @@
   max-width: calc(100vw - 20px);
   max-height: calc(100vh - 20px);
   overflow: auto;
-  border: 1px solid var(--b3-border-color);
-  border-radius: 9px;
+  border: var(--sv-border);
+  border-radius: var(--sv-radius-large);
   background: var(--b3-theme-background);
   color: var(--b3-theme-on-background);
   box-shadow: var(--b3-dialog-shadow);
@@ -1185,8 +1258,8 @@
 .secret-popover-identity strong {
   display: block;
   overflow: hidden;
-  font-size: 14px;
-  line-height: 1.35;
+  font-size: var(--sv-text-normal);
+  line-height: var(--sv-leading-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1195,7 +1268,7 @@
   display: block;
   margin-top: 2px;
   color: var(--b3-theme-on-surface);
-  font-size: 11px;
+  font-size: var(--sv-text-small);
 }
 
 .secret-popover-header-actions {
@@ -1204,7 +1277,7 @@
 }
 
 .secret-popover-state {
-  font-size: 13px;
+  font-size: var(--sv-text-normal);
 }
 
 .secret-popover-close {
@@ -1217,8 +1290,8 @@
 .secret-popover-unlock p {
   margin: 2px 0 9px;
   color: var(--b3-theme-on-surface);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-normal);
 }
 
 .secret-popover-inline-row {
@@ -1233,11 +1306,14 @@
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  border: 1px solid var(--b3-border-color);
-  border-radius: 6px;
+  border: var(--sv-border);
+  border-radius: var(--sv-radius-small);
   background: var(--b3-theme-surface);
   padding: 8px 9px;
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    var(--sv-text-normal) /
+    var(--sv-leading-normal)
+    var(--b3-font-family-code);
 }
 
 .secret-popover-editor {
@@ -1249,7 +1325,10 @@
   min-height: 140px;
   max-height: 45vh;
   resize: vertical;
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    var(--sv-text-normal) /
+    var(--sv-leading-normal)
+    var(--b3-font-family-code);
 }
 
 .secret-popover-actions {
@@ -1264,10 +1343,10 @@
 .secret-popover-message {
   margin-top: 8px;
   color: var(--b3-theme-on-surface);
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: var(--sv-text-small);
+  line-height: var(--sv-leading-tight);
 }
 
 .secret-popover-message--error {
-  color: var(--b3-card-error-color);
+  color: var(--sv-danger-color);
 }
