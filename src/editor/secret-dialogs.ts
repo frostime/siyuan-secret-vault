@@ -48,22 +48,70 @@ export class SecretDialogs {
     const groupNames = new Map(snapshot.groups.map((group) => [group.id, group.name]));
 
     const dialog = new Dialog({
-      title: "插入秘密",
-      width: "580px",
+      title: "插入已有秘密",
+      width: "560px",
       content: `
         <div class="b3-dialog__content secret-vault-picker">
-          <button class="b3-button b3-button--text fn__block" type="button" data-secret-picker-create>+ 新建秘密并插入</button>
-          <div class="secret-vault-picker__separator"></div>
-          <input class="b3-text-field fn__block" type="search" autocomplete="off" placeholder="按 label 或分组搜索已有秘密…" data-secret-picker-search />
-          <div class="secret-vault-picker__list" data-secret-picker-list></div>
-          <div class="secret-vault-picker__empty fn__none" data-secret-picker-empty>没有匹配的秘密。</div>
+          <div class="secret-vault-picker__toolbar">
+            <div class="secret-vault-picker__intro">
+              <strong>选择已有秘密</strong>
+              <span
+                class="secret-vault-picker__count"
+                data-secret-picker-count
+              >${snapshot.secrets.length} 个秘密</span>
+            </div>
+
+            <button
+              class="b3-button b3-button--text secret-vault-picker__create"
+              type="button"
+              data-secret-picker-create
+            >+ 新建秘密</button>
+          </div>
+
+          <label class="secret-vault-picker__search">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="m20.4 19-4.7-4.7a7 7 0 1 0-1.4 1.4l4.7 4.7a1 1 0 0 0 1.4-1.4ZM5 10a5 5 0 1 1 10 0 5 5 0 0 1-10 0Z"
+              />
+            </svg>
+
+            <input
+              class="b3-text-field"
+              type="search"
+              autocomplete="off"
+              placeholder="搜索 label 或分组"
+              data-secret-picker-search
+            />
+          </label>
+
+          <div
+            class="secret-vault-picker__list"
+            data-secret-picker-list
+          ></div>
+
+          <div
+            class="secret-vault-picker__empty fn__none"
+            data-secret-picker-empty
+          >没有匹配的秘密</div>
         </div>`,
     });
 
-    const create = dialog.element.querySelector<HTMLButtonElement>("[data-secret-picker-create]")!;
-    const search = dialog.element.querySelector<HTMLInputElement>("[data-secret-picker-search]")!;
-    const list = dialog.element.querySelector<HTMLElement>("[data-secret-picker-list]")!;
-    const empty = dialog.element.querySelector<HTMLElement>("[data-secret-picker-empty]")!;
+    const create = dialog.element.querySelector<HTMLButtonElement>(
+      "[data-secret-picker-create]",
+    )!;
+    const search = dialog.element.querySelector<HTMLInputElement>(
+      "[data-secret-picker-search]",
+    )!;
+    const list = dialog.element.querySelector<HTMLElement>(
+      "[data-secret-picker-list]",
+    )!;
+    const empty = dialog.element.querySelector<HTMLElement>(
+      "[data-secret-picker-empty]",
+    )!;
+    const count = dialog.element.querySelector<HTMLElement>(
+      "[data-secret-picker-count]",
+    )!;
 
     create.addEventListener("click", () => {
       dialog.destroy();
@@ -74,39 +122,50 @@ export class SecretDialogs {
       const query = search.value.trim().toLowerCase();
       const matches = snapshot.secrets.filter((secret) => {
         const groupName = groupNames.get(secret.groupId) ?? secret.groupId;
+
         return !query
           || secret.label.toLowerCase().includes(query)
           || groupName.toLowerCase().includes(query);
       });
 
+      count.textContent = query
+        ? `${matches.length} 个匹配 · 共 ${snapshot.secrets.length} 个`
+        : `${snapshot.secrets.length} 个秘密`;
+
       list.replaceChildren();
+      list.classList.toggle("fn__none", matches.length === 0);
       empty.classList.toggle("fn__none", matches.length > 0);
 
       for (const secret of matches) {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = "b3-list-item b3-list-item--two";
+        button.className = "secret-vault-picker__item";
+        button.title = `插入「${secret.label}」`;
 
-        const first = document.createElement("span");
-        first.className = "b3-list-item__first";
+        const label = document.createElement("span");
+        label.className = "secret-vault-picker__item-label";
+        label.textContent = secret.label;
 
-        const text = document.createElement("span");
-        text.className = "b3-list-item__text";
-        text.textContent = secret.label;
-        first.appendChild(text);
+        const group = document.createElement("span");
+        group.className = "secret-vault-picker__item-group";
+        group.textContent = groupNames.get(secret.groupId) ?? secret.groupId;
 
-        const meta = document.createElement("span");
-        meta.className = "b3-list-item__meta";
-        meta.textContent = groupNames.get(secret.groupId) ?? secret.groupId;
+        const arrow = document.createElement("span");
+        arrow.className = "secret-vault-picker__item-arrow";
+        arrow.setAttribute("aria-hidden", "true");
+        arrow.textContent = "›";
 
-        button.append(first, meta);
+        button.append(label, group, arrow);
+
         button.addEventListener("click", async () => {
           button.disabled = true;
+
           try {
             // The picker snapshot is intentionally static while the dialog is
             // open, but the selected Secret must still exist at commit time.
             const currentSecret = this.vault.getSecret(secret.id);
             if (!currentSecret) throw new Error("该秘密已被删除");
+
             const currentGroup = this.vault.getGroup(currentSecret.groupId);
             if (!currentGroup) throw new Error("秘密所属分组不存在");
 
@@ -115,6 +174,7 @@ export class SecretDialogs {
               currentGroup.name,
               slashTarget,
             );
+
             dialog.destroy();
           } catch (error) {
             button.disabled = false;
@@ -129,7 +189,9 @@ export class SecretDialogs {
     search.addEventListener("input", render);
     search.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
-        list.querySelector<HTMLButtonElement>("button:not(:disabled)")?.click();
+        list
+          .querySelector<HTMLButtonElement>("button:not(:disabled)")
+          ?.click();
       }
     });
 
