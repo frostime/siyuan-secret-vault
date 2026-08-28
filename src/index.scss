@@ -387,6 +387,21 @@
   gap: 4px;
 }
 
+.vault-detail-delete {
+  margin-left: 5px;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+
+.vault-detail-delete:not(:disabled):hover {
+  background: color-mix(
+    in srgb,
+    var(--b3-card-error-color, #c33) 9%,
+    transparent
+  );
+  text-decoration: none;
+}
+
 .vault-content-section,
 .vault-metadata {
   margin-top: 22px;

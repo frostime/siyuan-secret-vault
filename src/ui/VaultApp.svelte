@@ -582,17 +582,29 @@
             <h1>{selectedSecret.label}</h1>
           </div>
           <div class="vault-detail-toolbar">
-            <button class="vault-quiet-button" onclick={insertSelectedSecret}>插入文档</button>
-            <button
-              class="vault-quiet-button"
-              disabled={!selectedGroup?.unlocked || busy}
-              onclick={copySelectedSecret}
-            >复制</button>
             <button
               class="b3-button b3-button--outline"
               disabled={!selectedGroup?.unlocked || busy}
               onclick={startEditSecret}
             >编辑</button>
+
+            <button
+              class="vault-quiet-button"
+              disabled={!selectedGroup?.unlocked || busy}
+              onclick={copySelectedSecret}
+            >复制</button>
+
+            <button
+              class="vault-quiet-button"
+              disabled={busy}
+              onclick={insertSelectedSecret}
+            >插入文档</button>
+
+            <button
+              class="vault-danger-link vault-detail-delete"
+              disabled={!selectedGroup?.unlocked || busy}
+              onclick={removeSelectedSecret}
+            >删除</button>
           </div>
         </header>
 
@@ -630,14 +642,6 @@
         {#if errorText}
           <div class="vault-error">{errorText}</div>
         {/if}
-
-        <footer class="vault-detail-footer">
-          <button
-            class="vault-danger-link"
-            disabled={!selectedGroup?.unlocked || busy}
-            onclick={removeSelectedSecret}
-          >删除秘密</button>
-        </footer>
       </section>
     {:else}
       <div class="vault-detail-empty">
