@@ -1,32 +1,32 @@
-# Secret Vault
+# 秘密库
 
-Secret Vault is a SiYuan plugin for storing encrypted secrets on your own device. Secrets live in the plugin's private data store; your documents only contain inert text references, so opening a document never runs plugin code or loads any secret. Clicking a reference explicitly opens a popover to unlock, view, edit, or copy the secret.
+秘密库是一个思源笔记插件，用于在自己的设备上加密保存秘密内容。秘密存放在插件的私有数据中，文档里只有惰性文本引用——打开文档不会运行任何插件代码，也不会加载任何秘密。点击引用后，才会显式弹出一个悬浮交互框，用于解锁、查看、编辑或复制秘密。
 
-## What it can do
+## 能做什么
 
-- Secrets are organized into groups, and each group has its own password. Content is encrypted with PBKDF2 + AES-256-GCM; keys are derived in memory and never persisted.
-- A reference in a document is an ordinary paragraph with a plugin deep link and non-sensitive snapshots (label, group name, timestamps).
-- Clicking a reference opens a single non-modal popover anchored to the link, where you can unlock the group, view multi-line content, edit label/content, copy, and lock.
-- A Vault workspace manages groups and secrets, and offers an explicit migration center for old references.
+- 秘密按分组组织，每个分组有独立口令。内容使用 PBKDF2 + AES-256-GCM 加密，密钥只在内存中派生，从不落盘。
+- 文档中的引用是普通段落加插件链接，只附带非敏感快照（标签、分组名、时间戳）。
+- 点击引用会在链接旁打开唯一的非模态悬浮框，可解锁分组、查看多行内容、编辑标签和内容、复制、锁定。
+- 秘密库工作台负责管理分组与秘密，并提供旧引用的显式迁移中心。
 
-## How to use it
+## 怎么用
 
-1. Install the plugin from the marketplace, then open **Secret Vault** from the top bar.
-2. Create a group and set its password. All secrets in the group are encrypted with that password.
-3. Add secrets to the group; multi-line content is supported.
-4. In a document, type `/secret` and choose **新建秘密并插入** to create a secret and insert its reference, or **插入已有秘密** to insert an existing one.
-5. Click the 🔐 link in the paragraph, enter the group password in the popover, then view, edit, or copy the content. Click the lock button or wait for the idle timeout when you are done.
+1. 从集市安装插件，然后点击顶栏的**秘密库**图标打开工作台。
+2. 新建分组并设置口令，组内所有秘密都用该口令加密。
+3. 在分组中添加秘密，支持多行内容。
+4. 在文档中输入 `/秘密` 或 `/secret` ，选择**新建秘密并插入**创建秘密并插入引用，或选择**插入已有秘密**插入已有秘密。
+5. 点击段落中的 🔐 链接，在悬浮框中输入分组口令，即可查看、编辑或复制内容。用完可点击锁定按钮，或等待超时自动锁定。
 
-Plaintext exists only in memory while a group is unlocked. Authorization is scoped to the current editor context and is revoked on idle timeout (15 minutes), manual lock, context destruction, vault reload after sync, password change, or plugin unload.
+分组解锁期间，明文只存在于内存。授权绑定当前编辑器上下文，并在空闲超时（15 分钟）、手动锁定、上下文销毁、同步后重载、修改口令或插件卸载时收回。
 
-## Screenshots
+## 截图
 
-<!-- TODO: add screenshots under docs/screenshots/ -->
+<!-- TODO: 将截图放入 docs/screenshots/ -->
 
-![Secret Vault workspace](docs/screenshots/vault.png)
+![秘密库工作台](docs/screenshots/vault.png)
 
-![Secret popover in a document](docs/screenshots/popover.png)
+![文档中的秘密悬浮框](docs/screenshots/popover.png)
 
-## License
+## 许可证
 
 MIT

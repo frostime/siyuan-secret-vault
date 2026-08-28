@@ -15,16 +15,16 @@
     "desktop-window"
   ],
   "displayName": {
-    "default": "Secret Vault",
-    "zh-CN": "秘密库"
+    "default": "秘密库",
+    "en": "Secret Vault"
   },
   "description": {
-    "default": "Encrypted secrets with inert paragraph references and explicit non-modal popover interaction.",
-    "zh-CN": "按分组加密秘密；文档引用为惰性普通段落，仅在用户显式点击后打开非模态悬浮交互框。"
+    "default": "按分组加密秘密；文档引用为普通段落加插件链接，仅在用户显式点击后打开非模态悬浮交互框。",
+    "en": "Encrypted secrets with inert paragraph references and explicit non-modal popover interaction."
   },
   "readme": {
     "default": "README.md",
-    "zh-CN": "README.zh-CN.md"
+    "en": "README.en.md"
   },
   "keywords": [
     "secret",
