@@ -142,12 +142,11 @@ export default class SecretVaultPlugin extends Plugin {
       {
         filter: [
           "secret",
-          "new secret",
-          "create secret",
           "秘密",
-          "新建秘密",
-          "创建秘密",
-          "加密内容",
+          "mimi",
+          "mm",
+          "加密",
+          "密"
         ],
         html: `<div class="b3-list-item__first"><span class="b3-list-item__text">新建秘密并插入</span><span class="b3-list-item__meta">🔐 +</span></div>`,
         id: "create-secret-and-insert",

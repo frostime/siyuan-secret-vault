@@ -13,6 +13,8 @@ export default defineConfig({
       targets: [
         { src: "./plugin.json", dest: "./" },
         { src: "./README*.md", dest: "./" },
+        { src: "./icon.png", dest: "./" },
+        { src: "./preview.png", dest: "./" },
       ],
     }),
   ],
