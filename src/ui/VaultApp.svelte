@@ -8,6 +8,14 @@
   type DetailMode = "view" | "create" | "edit";
   type WorkspaceSection = "vault" | "migrations";
 
+  interface ConfirmRequest {
+    title: string;
+    message: string;
+    confirmLabel: string;
+    danger?: boolean;
+    action: () => Promise<void>;
+  }
+
   let {
     vault,
     contextId,
@@ -62,6 +70,12 @@
   let moveSourcePassword = $state("");
   let moveTargetPassword = $state("");
   let moveError = $state("");
+
+  // Plugin-owned confirmation dialog. Native window.confirm is avoided:
+  // it blocks the SiYuan window and does not match the vault styling.
+  let confirmRequest = $state<ConfirmRequest | null>(null);
+  let confirmError = $state("");
+  let confirmBusy = $state(false);
 
   let workspaceSection = $state<WorkspaceSection>("vault");
   let selectedMigrationId = $state(migrationTasks[0]?.id ?? "");
@@ -298,27 +312,62 @@
     await run(() => copySecretReference(selectedSecret.id));
   }
 
-  async function removeSelectedSecret() {
-    if (!selectedSecret || !selectedGroup?.unlocked) return;
-    if (!confirm(`确定删除“${selectedSecret.label}”？文档中的引用将变成失效引用。`)) return;
-
-    const deletedId = selectedSecret.id;
-    await run(() => vault.deleteSecret(contextId, deletedId));
-    if (errorText) return;
-
-    selectedSecretId = snapshot.secrets.find(
-      (secret) => secret.groupId === selectedGroup.id && secret.id !== deletedId,
-    )?.id ?? null;
-    detailMode = "view";
-    void refreshDetailContent();
+  function openConfirm(request: ConfirmRequest): void {
+    confirmError = "";
+    confirmRequest = request;
   }
 
-  async function removeSelectedGroup() {
-    if (!selectedGroup || selectedGroup.id === "default") return;
-    if (!confirm(`确定删除分组“${selectedGroup.name}”？`)) return;
+  function cancelConfirm(): void {
+    if (confirmBusy) return;
+    confirmRequest = null;
+    confirmError = "";
+  }
 
-    await run(() => vault.deleteGroup(selectedGroup.id));
-    if (!errorText) selectGroup("default");
+  async function runConfirm(): Promise<void> {
+    if (!confirmRequest || confirmBusy) return;
+    confirmBusy = true;
+    confirmError = "";
+    try {
+      await confirmRequest.action();
+      confirmRequest = null;
+    } catch (error) {
+      confirmError = error instanceof Error ? error.message : String(error);
+    } finally {
+      confirmBusy = false;
+    }
+  }
+
+  function requestRemoveSelectedSecret() {
+    if (!selectedSecret || !selectedGroup?.unlocked) return;
+    openConfirm({
+      title: "删除秘密",
+      message: `确定删除“${selectedSecret.label}”？文档中的引用将变成失效引用。`,
+      confirmLabel: "删除",
+      danger: true,
+      action: async () => {
+        const deletedId = selectedSecret.id;
+        await vault.deleteSecret(contextId, deletedId);
+        selectedSecretId = snapshot.secrets.find(
+          (secret) => secret.groupId === selectedGroup.id && secret.id !== deletedId,
+        )?.id ?? null;
+        detailMode = "view";
+        void refreshDetailContent();
+      },
+    });
+  }
+
+  function requestRemoveSelectedGroup() {
+    if (!selectedGroup || selectedGroup.id === "default") return;
+    openConfirm({
+      title: "删除分组",
+      message: `确定删除分组“${selectedGroup.name}”？`,
+      confirmLabel: "删除",
+      danger: true,
+      action: async () => {
+        await vault.deleteGroup(selectedGroup.id);
+        selectGroup("default");
+      },
+    });
   }
 
   // ---- move secrets to another group ----
@@ -467,20 +516,25 @@
     }
   }
 
-  async function runMigrationTask() {
+  function requestRunMigration() {
     if (!selectedMigration || !migrationPreview || migrationPreview.ready === 0 || migrationBusy) return;
-    if (!confirm(`将串行处理 ${migrationPreview.ready} 个文档引用。建议先关闭相关文档，并确保思源同步已完成。是否继续？`)) return;
-
-    migrationBusy = true;
-    migrationError = "";
-    try {
-      migrationResult = await selectedMigration.run(migrationPreview);
-      migrationPreview = await selectedMigration.inspect();
-    } catch (error) {
-      migrationError = error instanceof Error ? error.message : String(error);
-    } finally {
-      migrationBusy = false;
-    }
+    openConfirm({
+      title: "执行迁移",
+      message: `将串行处理 ${migrationPreview.ready} 个文档引用。建议先关闭相关文档，并确保思源同步已完成。是否继续？`,
+      confirmLabel: "开始执行",
+      action: async () => {
+        migrationBusy = true;
+        migrationError = "";
+        try {
+          migrationResult = await selectedMigration.run(migrationPreview);
+          migrationPreview = await selectedMigration.inspect();
+        } catch (error) {
+          migrationError = error instanceof Error ? error.message : String(error);
+        } finally {
+          migrationBusy = false;
+        }
+      },
+    });
   }
 </script>
 
@@ -702,7 +756,7 @@
 
       {#if selectedGroup.id !== "default"}
         <footer class="vault-list-footer">
-          <button class="vault-danger-link" onclick={removeSelectedGroup}>删除此分组</button>
+          <button class="vault-danger-link" onclick={requestRemoveSelectedGroup}>删除此分组</button>
         </footer>
       {/if}
     {/if}
@@ -777,7 +831,7 @@
             <button
               class="vault-danger-link vault-detail-delete"
               disabled={!selectedGroup?.unlocked || busy}
-              onclick={removeSelectedSecret}
+              onclick={requestRemoveSelectedSecret}
             >删除</button>
           </div>
         </header>
@@ -852,7 +906,7 @@
               <button
                 class="b3-button b3-button--text"
                 disabled={migrationBusy || migrationPreview.ready === 0}
-                onclick={runMigrationTask}
+                onclick={requestRunMigration}
               >开始执行 {migrationPreview.ready > 0 ? `(${migrationPreview.ready})` : ""}</button>
             </div>
 
@@ -983,6 +1037,33 @@
           disabled={busy || pendingMoveIds.length === 0}
           onclick={confirmMove}
         >移动</button>
+      </footer>
+    </section>
+  </div>
+{/if}
+
+{#if confirmRequest}
+  <div
+    class="vault-modal-backdrop"
+    role="presentation"
+    onclick={(event) => {
+      if (event.target === event.currentTarget && !confirmBusy) cancelConfirm();
+    }}
+  >
+    <section class="vault-modal vault-confirm-modal" role="dialog" aria-modal="true">
+      <h3>{confirmRequest.title}</h3>
+      <p class="vault-muted">{confirmRequest.message}</p>
+      {#if confirmError}
+        <div class="vault-error">{confirmError}</div>
+      {/if}
+      <footer>
+        <button class="vault-quiet-button" disabled={confirmBusy} onclick={cancelConfirm}>取消</button>
+        <button
+          class="b3-button b3-button--text"
+          class:vault-confirm-danger={confirmRequest.danger}
+          disabled={confirmBusy}
+          onclick={runConfirm}
+        >{confirmRequest.confirmLabel}</button>
       </footer>
     </section>
   </div>

@@ -780,6 +780,10 @@
   margin-top: 16px;
 }
 
+.vault-confirm-danger {
+  color: var(--b3-card-error-color, #c33);
+}
+
 .secret-vault-picker {
   display: grid;
   gap: 12px;
