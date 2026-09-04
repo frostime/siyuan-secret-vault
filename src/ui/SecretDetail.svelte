@@ -5,6 +5,40 @@
 </script>
 
 <main class="vault-detail">
+  {#snippet unlockPanel()}
+    {@const group = workbench.selectedGroup}
+    <div class="vault-unlock-panel">
+      <div class="vault-unlock-head">
+        <span class="vault-lock-glyph">🔒</span>
+        <div>
+          <strong>
+            {group.initialized ? `分组「${group.name}」已锁定` : `分组「${group.name}」未设置口令`}
+          </strong>
+          <p>
+            {group.initialized
+              ? "输入分组口令后即可查看和编辑此分组的秘密内容。"
+              : "设置分组口令后即可加密和查看此分组的秘密内容。"}
+          </p>
+        </div>
+      </div>
+      <div class="vault-unlock-field">
+        <input
+          class="b3-text-field"
+          type="password"
+          autocomplete={group.initialized ? "current-password" : "new-password"}
+          bind:value={workbench.unlockPassword}
+          placeholder={group.initialized ? "输入分组口令" : "设置这个分组的口令"}
+          onkeydown={(event) => {
+            if (event.key === "Enter" && !workbench.busy) void workbench.unlockSelectedGroup();
+          }}
+        />
+        <button class="b3-button b3-button--text" disabled={workbench.busy} onclick={() => workbench.unlockSelectedGroup()}>
+          {group.initialized ? "解锁" : "设置"}
+        </button>
+      </div>
+      <p class="vault-unlock-hint">口令仅保存在内存中，15 分钟无操作后自动重新锁定。文档中的授权与这里彼此独立。</p>
+    </div>
+  {/snippet}
   {#if workbench.detailMode === "create" || workbench.detailMode === "edit"}
     <section class="vault-detail-panel">
       <header class="vault-detail-header">
@@ -81,13 +115,7 @@
       <section class="vault-content-section">
         <div class="vault-section-label">Content</div>
         {#if !workbench.selectedGroup?.unlocked}
-          <div class="vault-locked-content">
-            <span class="vault-lock-glyph">🔒</span>
-            <div>
-              <strong>此分组在秘密库中已锁定</strong>
-              <p>在左侧输入分组口令后即可查看和编辑内容。文档中的授权与这里彼此独立。</p>
-            </div>
-          </div>
+          {@render unlockPanel()}
         {:else if workbench.detailLoading}
           <div class="vault-content-placeholder">正在解密…</div>
         {:else}
@@ -109,6 +137,13 @@
         </dl>
       </section>
 
+      {#if workbench.errorText}
+        <div class="vault-error">{workbench.errorText}</div>
+      {/if}
+    </section>
+  {:else if workbench.selectedGroup && !workbench.selectedGroup.unlocked}
+    <section class="vault-detail-panel">
+      {@render unlockPanel()}
       {#if workbench.errorText}
         <div class="vault-error">{workbench.errorText}</div>
       {/if}
@@ -191,7 +226,6 @@
   }
 
   .vault-content-view,
-  .vault-locked-content,
   .vault-content-placeholder {
     margin: 8px 0 0;
     border: var(--sv-border);
@@ -227,27 +261,55 @@
     opacity: .55;
   }
 
-  .vault-locked-content {
+  /* Locked groups render this panel in place of the secret content. It is the
+     only unlock affordance since the list header no longer holds an input. */
+  .vault-unlock-panel {
+    margin: 8px 0 0;
+    border: var(--sv-border);
+    border-radius: var(--sv-radius-normal);
+    background: var(--sv-surface-soft);
+    padding: 14px;
+  }
+
+  .vault-unlock-head {
     display: flex;
     align-items: flex-start;
     gap: 10px;
-    padding: 14px;
   }
 
   .vault-lock-glyph {
     margin-top: 1px;
   }
 
-  .vault-locked-content strong {
+  .vault-unlock-head strong {
     font-size: var(--sv-text-normal);
   }
 
-  .vault-locked-content p {
+  .vault-unlock-head p {
     max-width: 560px;
     margin: 4px 0 0;
     font-size: var(--sv-text-small);
     line-height: var(--sv-leading-relaxed);
     opacity: .58;
+  }
+
+  .vault-unlock-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 14px;
+  }
+
+  .vault-unlock-field input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .vault-unlock-hint {
+    margin: 10px 0 0;
+    font-size: var(--sv-text-small);
+    line-height: var(--sv-leading-relaxed);
+    opacity: .45;
   }
 
   .vault-metadata dl {

@@ -6,7 +6,7 @@ SiYuan 插件：加密秘密库。秘密按分组组织，每组独立口令（P
 
 - `pnpm dev` — 开发模式（vite watch build）
 - `pnpm build` — 生产构建，产物在 `dist/`；`package.zip` 由 CI 在打 tag 时生成
-- `pnpm check` — svelte-check 类型检查。**存在既有基线错误**（siyuan 类型声明过旧：`Protyle.wysiwyg`/`block`/`replaceAll` 等，当前 15 errors / 4 warnings）：改动前后对比该计数，不引入新增错误即可
+- `pnpm check` — svelte-check 类型检查。**存在既有基线错误**（siyuan 类型声明过旧：`Protyle.wysiwyg`/`block`/`replaceAll` 等，2026-09-04 实测 7 errors / 7 warnings）：改动前后对比该计数，不引入新增错误即可
 
 无自动化测试框架。验证方式 = check 计数不变 + build 通过 + 在思源中加载 `dist/` 手工验证。
 

@@ -36,24 +36,6 @@
         </div>
       </div>
 
-      {#if !workbench.selectedGroup.unlocked}
-        <div class="vault-unlock-row">
-          <input
-            class="b3-text-field"
-            type="password"
-            autocomplete="current-password"
-            bind:value={workbench.unlockPassword}
-            placeholder={workbench.selectedGroup.initialized ? "输入分组口令" : "设置这个分组的口令"}
-            onkeydown={(event) => {
-              if (event.key === "Enter" && !workbench.busy) void workbench.unlockSelectedGroup();
-            }}
-          />
-          <button class="b3-button b3-button--text" disabled={workbench.busy} onclick={() => workbench.unlockSelectedGroup()}>
-            {workbench.selectedGroup.initialized ? "解锁" : "设置"}
-          </button>
-        </div>
-      {/if}
-
       <div class="vault-search-row">
         <input class="b3-text-field" bind:value={workbench.filter} placeholder="搜索 label" />
         {#if !workbench.multiSelectMode}
@@ -192,7 +174,6 @@
     gap: 2px;
   }
 
-  .vault-unlock-row,
   .vault-search-row {
     display: flex;
     align-items: center;
@@ -200,7 +181,6 @@
     margin-top: 10px;
   }
 
-  .vault-unlock-row input,
   .vault-search-row input {
     min-width: 0;
     flex: 1;
