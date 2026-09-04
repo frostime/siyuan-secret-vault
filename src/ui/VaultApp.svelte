@@ -22,6 +22,9 @@
     migrationTasks: MigrationTask[];
   }>();
 
+  // The workbench binds these props once at mount: the tab host provides
+  // stable references for the whole tab lifetime (index.ts), so capturing
+  // the initial values is the intended initialization contract.
   const workbench = new VaultWorkbench(vault, contextId, copySecretReference, migrationTasks);
 
   onMount(() => workbench.mount());
