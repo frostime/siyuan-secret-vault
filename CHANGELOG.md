@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-04
+
 ### Added
 
 - 秘密列表支持勾选多条并移动到另一个分组：列表多选操作条与详情面板均提供「移动到…」入口，源/目标分组锁定时可就地输入口令完成移动。
