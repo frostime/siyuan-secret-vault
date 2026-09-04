@@ -6,7 +6,7 @@ SiYuan 插件：加密秘密库。秘密按分组组织，每组独立口令（P
 
 - `pnpm dev` — 开发模式（vite watch build）
 - `pnpm build` — 生产构建，产物在 `dist/`；`package.zip` 由 CI 在打 tag 时生成
-- `pnpm check` — svelte-check 类型检查。**存在既有基线错误**（siyuan 类型声明过旧：`Protyle.wysiwyg`/`block`/`replaceAll` 等，当前 15 errors / 4 warnings）：改动前后对比该计数，不引入新增错误即可
+- `pnpm check` — svelte-check 类型检查。**存在既有基线错误**（siyuan 类型声明过旧：`Protyle.wysiwyg`/`block`/`replaceAll` 等，2026-09-04 实测 7 errors / 7 warnings）：改动前后对比该计数，不引入新增错误即可
 
 无自动化测试框架。验证方式 = check 计数不变 + build 通过 + 在思源中加载 `dist/` 手工验证。
 
@@ -17,7 +17,9 @@ SiYuan 插件：加密秘密库。秘密按分组组织，每组独立口令（P
 - `crypto.ts` — PBKDF2 / AES-256-GCM 原语；AAD 绑定 `group:<groupId>:secret:<secretId>`
 - `reference/secret-reference.ts` — v4 引用段落格式（URL + `custom-secret-*` 属性）；`custom-secret-id` 是唯一权威身份
 - `interaction/secret-interaction.ts` — 点击引用 → 弹框生命周期；打开前校验引用身份，陈旧快照后台刷新
-- `ui/VaultApp.svelte` — 工作台：分组/秘密管理、多选移动、迁移中心
+- `ui/workbench.svelte.ts` — VaultWorkbench class-store：工作台全部状态（$state/$derived）与行为（解锁/编辑/移动/迁移/确认弹框）；组件只做视图
+- `ui/VaultApp.svelte` — 工作台根：装配 workbench、三栏布局、三个对话框（Modal + 子内容）
+- `ui/GroupSidebar.svelte` / `ui/SecretList.svelte` / `ui/SecretDetail.svelte` / `ui/MigrationWorkspace.svelte` / `ui/Modal.svelte` — 视图组件，样式各自 scoped
 - `migrations/reference-to-paragraph.ts` — v1/v2/v3 → v4 显式迁移任务
 - `siyuan/api.ts` — 内核 HTTP 边界（块/属性/SQL）
 

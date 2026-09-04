@@ -1,3 +1,16 @@
+---
+title: Secret Vault Architecture
+description: v4 document reference architecture: dormant references, explicit popover interaction, authorization boundaries, and migration policy.
+scope:
+  - /src/vault.ts
+  - /src/access.ts
+  - /src/reference/**
+  - /src/interaction/**
+  - /src/migrations/**
+  - /src/ui/**
+updated: 2026-09-04
+---
+
 # Secret Vault Architecture — v4 document references
 
 ## 1. Design pressure
@@ -249,6 +262,17 @@ src/interaction/editor-context.ts
 src/interaction/secret-interaction.ts
   plugin-link event correlation, reference validation and popover lifecycle
 
+src/ui/workbench.svelte.ts
+  VaultWorkbench class-store: workspace state ($state/$derived) and all
+  workspace behavior; components are thin views over this instance
+
+src/ui/VaultApp.svelte
+  workspace root: workbench assembly, three-column layout, dialogs
+
+src/ui/GroupSidebar.svelte / SecretList.svelte / SecretDetail.svelte /
+  MigrationWorkspace.svelte / Modal.svelte
+  view components with scoped styles; Modal is the shared dialog shell
+
 src/interaction/SecretPopover.svelte
   transient unlock/view/edit/copy UI only
 
@@ -260,14 +284,11 @@ src/siyuan/api.ts
 
 src/migrations/reference-to-paragraph.ts
   explicit v1/v2/v3 -> v4 migration policy
-
-src/ui/VaultApp.svelte
-  full Vault workspace and Migration Center
 ```
 
 ## 12. Deliberate YAGNI cuts
 
-0.6.0 intentionally does not build:
+The Vault intentionally does not build:
 
 - a generic popover framework;
 - runtime reference synchronization;
