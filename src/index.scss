@@ -585,6 +585,13 @@
     var(--b3-font-family-code);
 }
 
+/* SiYuan's .layout-tab-container sets user-select: none, which would make
+   the vault contents unselectable; restore selection for the content area. */
+.secret-vault-tab .vault-content-view {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .vault-content-placeholder {
   padding: 30px 14px;
   text-align: center;

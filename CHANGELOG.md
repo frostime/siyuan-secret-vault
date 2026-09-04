@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 修复新增分组卡片中口令/名称输入框宽度溢出窄列的问题。
 - 删除秘密/分组与执行迁移的原生确认弹窗替换为插件内的确认对话框。
+- 秘密详情内容区域允许鼠标选择文本（思源 tab 容器默认禁用选择）。
 
 ## [0.2.0] - 2026-08-26
 
