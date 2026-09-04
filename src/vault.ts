@@ -496,6 +496,83 @@ export class VaultController {
     });
   }
 
+  /**
+   * Re-homes secrets into another group within one committed mutation.
+   *
+   * Ciphertext is bound to group and secret id, so each moved secret must be
+   * decrypted with its source group key and re-encrypted with the target group
+   * key. Decryption of every pending secret completes before any re-encryption
+   * and persistence, so a wrong password or corrupt payload rolls the whole
+   * batch back instead of leaving a partial move. Secret ids stay unchanged;
+   * document references therefore keep working after the move.
+   *
+   * Both the source groups and the target group must already be authorized for
+   * `contextId`; no implicit unlock happens here. Returns the number of secrets
+   * actually moved (secrets already in the target group are skipped).
+   */
+  async moveSecrets(
+    contextId: AccessContextId,
+    secretIds: SecretId[],
+    targetGroupId: GroupId,
+  ): Promise<number> {
+    return this.mutations.runExclusive(async () => {
+      this.requireGroup(targetGroupId);
+
+      const next = cloneVault(this.data);
+      const targetKey = this.access.getAuthorizedKey(contextId, targetGroupId);
+      const sourceGroupIds = new Set<GroupId>();
+
+      const pending: Array<{
+        secret: SecretRecord;
+        plaintext: string;
+      }> = [];
+      for (const secretId of secretIds) {
+        const secret = this.requireSecret(secretId, next);
+        if (secret.groupId === targetGroupId) continue;
+
+        sourceGroupIds.add(secret.groupId);
+        const sourceKey = this.access.getAuthorizedKey(contextId, secret.groupId);
+        pending.push({
+          secret,
+          plaintext: await decryptSecretContent(
+            sourceKey,
+            secret.groupId,
+            secret.id,
+            secret.encryptedContent,
+          ),
+        });
+      }
+
+      if (pending.length === 0) return 0;
+
+      const now = Date.now();
+      for (const item of pending) {
+        item.secret.encryptedContent = await encryptSecretContent(
+          targetKey,
+          targetGroupId,
+          item.secret.id,
+          item.plaintext,
+        );
+        item.secret.groupId = targetGroupId;
+        item.secret.updatedAt = now;
+      }
+
+      // Manual lock or context destruction may occur while crypto is running,
+      // so re-check every involved group immediately before persistence.
+      for (const groupId of sourceGroupIds) {
+        this.access.getAuthorizedKey(contextId, groupId, { touch: false });
+      }
+      this.access.getAuthorizedKey(contextId, targetGroupId, { touch: false });
+      await this.persistAndCommit(next);
+
+      this.publishSnapshots();
+      for (const item of pending) {
+        this.revoke({ scope: "secret", secretId: item.secret.id, reason: "secret-moved" });
+      }
+      return pending.length;
+    });
+  }
+
   private requireGroup(groupId: GroupId, data: VaultData = this.data): SecretGroup {
     const group = data.groups.find((item) => item.id === groupId);
     if (!group) throw new Error("分组不存在");

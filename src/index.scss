@@ -365,6 +365,55 @@
   box-shadow: inset 2px 0 0 var(--b3-theme-primary);
 }
 
+.vault-secret-row.selection-active {
+  background: var(--b3-list-hover);
+}
+
+/* Multi-select: the checkbox sits outside the row button (interactive
+   content must not nest inside a button) and reveals on hover. */
+.vault-secret-item {
+  display: flex;
+  align-items: center;
+}
+
+.vault-secret-check {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 0 2px 0 5px;
+  accent-color: var(--b3-theme-primary);
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.vault-secret-item:hover .vault-secret-check,
+.vault-secret-check:checked {
+  visibility: visible;
+}
+
+.vault-select-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--b3-border-color);
+  border-bottom: 1px solid var(--b3-border-color);
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 7%,
+    transparent
+  );
+}
+
+.vault-select-count {
+  font-size: var(--sv-text-small);
+  color: var(--b3-theme-primary);
+}
+
+.vault-select-spacer {
+  flex: 1;
+}
+
 .vault-secret-label {
   min-width: 0;
   overflow: hidden;
@@ -464,6 +513,10 @@
     transparent
   );
   text-decoration: none;
+}
+
+.vault-move-button {
+  color: var(--b3-theme-primary);
 }
 
 .vault-content-section,
@@ -640,6 +693,45 @@
 
 .vault-modal label {
   margin-top: 14px;
+}
+
+.vault-move-targets {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.vault-move-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--b3-border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vault-move-target:hover {
+  border-color: var(--b3-theme-primary);
+}
+
+.vault-move-target.selected {
+  border-color: var(--b3-theme-primary);
+  background: color-mix(
+    in srgb,
+    var(--b3-theme-primary) 9%,
+    transparent
+  );
+}
+
+.vault-move-target-meta {
+  margin-left: auto;
+  font-size: var(--sv-text-small);
+  opacity: .55;
 }
 
 .vault-modal footer {

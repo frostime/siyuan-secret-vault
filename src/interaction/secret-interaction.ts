@@ -2,7 +2,7 @@ import { mount, unmount } from "svelte";
 import { showMessage, type Plugin, type Protyle } from "siyuan";
 import type { AuthorizationRevocation, AccessContextId, SecretViewState } from "../types";
 import type { VaultController } from "../vault";
-import type { SecretReferenceService } from "../reference/secret-reference";
+import { SecretReferenceService, type SecretReferenceSource } from "../reference/secret-reference";
 import type { EditorContextRegistry } from "./editor-context";
 import SecretPopover from "./SecretPopover.svelte";
 
@@ -132,7 +132,8 @@ export class SecretInteractionController {
   }
 
   private async openFromAnchor(secretId: string, anchor: PendingAnchor): Promise<void> {
-    if (!(await this.references.matchesReference(anchor.blockId, secretId))) {
+    const attrs = await this.references.loadReference(anchor.blockId, secretId);
+    if (!attrs) {
       throw new Error("Secret 链接与当前块属性不一致，已拒绝打开");
     }
 
@@ -144,6 +145,28 @@ export class SecretInteractionController {
     this.vault.activateContext(anchor.contextId);
     const initialState = await this.vault.getSecretView(anchor.contextId, secretId);
     this.openPopover(anchor, initialState, Boolean(group.verifier));
+
+    // The popover renders live Vault data, so a stale reference snapshot never
+    // blocks opening. Refresh it in the background; failure is non-blocking.
+    if (this.references.snapshotNeedsRefresh(attrs, secret, group.name)) {
+      void this.refreshReferenceSnapshot(anchor.blockId, secret, group.name);
+    }
+  }
+
+  private async refreshReferenceSnapshot(
+    blockId: string,
+    secret: SecretReferenceSource,
+    groupName: string,
+  ): Promise<void> {
+    try {
+      await this.references.refreshSnapshot(blockId, secret, groupName);
+      showMessage(`已刷新引用快照：${secret.label}`);
+    } catch (error) {
+      // The reference may have been edited or deleted while the popover was
+      // opening; refreshSnapshot re-validates before writing, so this only
+      // means the block was not refreshed. Never fail the interaction.
+      console.warn("引用快照刷新失败", errorMessage(error));
+    }
   }
 
   private openPopover(

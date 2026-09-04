@@ -151,6 +151,11 @@ refreshes the clicked paragraph's non-sensitive snapshot. A snapshot refresh
 failure does not roll back a successfully committed Secret; it is reported as a
 separate presentation warning.
 
+Opening a popover also revalidates the clicked paragraph's snapshot against
+live Vault data (label, group name, timestamps). A stale snapshot is refreshed
+in the background — the popover renders live data and never waits for the
+write — with a non-blocking showMessage on success.
+
 ## 7. Authorization and revocation
 
 `GroupAccessManager` remains the runtime owner of:
