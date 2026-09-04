@@ -50,6 +50,19 @@
   let showPasswordDialog = $state(false);
   let replacementPassword = $state("");
 
+  // Multi-select move state. Selected secret ids always belong to the group
+  // currently shown in the list, so the source group is `selectedGroup`.
+  // The mode is explicit: checkboxes only appear after the user enters it, so
+  // the normal list keeps its original layout with no leading placeholder.
+  let multiSelectMode = $state(false);
+  let selectedSecretIds = $state<string[]>([]);
+  let showMoveDialog = $state(false);
+  let pendingMoveIds = $state<string[]>([]);
+  let moveTargetGroupId = $state("");
+  let moveSourcePassword = $state("");
+  let moveTargetPassword = $state("");
+  let moveError = $state("");
+
   let workspaceSection = $state<WorkspaceSection>("vault");
   let selectedMigrationId = $state(migrationTasks[0]?.id ?? "");
   let migrationPreview = $state<MigrationPreview | null>(null);
@@ -93,6 +106,14 @@
   }));
 
   function reconcileSelection() {
+    // Drop checked ids that no longer exist (deleted or moved elsewhere); the
+    // multi-select bar must never offer moving stale secrets.
+    selectedSecretIds = selectedSecretIds.filter((id) =>
+      snapshot.secrets.some(
+        (secret) => secret.id === id && secret.groupId === selectedGroupId,
+      ),
+    );
+
     if (!snapshot.groups.some((group) => group.id === selectedGroupId)) {
       selectedGroupId = snapshot.groups[0]?.id ?? "default";
     }
@@ -135,6 +156,7 @@
     editingSecretId = null;
     unlockPassword = "";
     errorText = "";
+    exitMultiSelect();
     selectedSecretId = snapshot.secrets.find((secret) => secret.groupId === groupId)?.id ?? null;
     void refreshDetailContent();
   }
@@ -297,6 +319,106 @@
 
     await run(() => vault.deleteGroup(selectedGroup.id));
     if (!errorText) selectGroup("default");
+  }
+
+  // ---- move secrets to another group ----
+
+  function enterMultiSelect(): void {
+    selectedSecretIds = [];
+    multiSelectMode = true;
+  }
+
+  function exitMultiSelect(): void {
+    multiSelectMode = false;
+    selectedSecretIds = [];
+  }
+
+  function toggleSecretSelection(secretId: string): void {
+    selectedSecretIds = selectedSecretIds.includes(secretId)
+      ? selectedSecretIds.filter((id) => id !== secretId)
+      : [...selectedSecretIds, secretId];
+  }
+
+  function openMoveDialogFromSelection(): void {
+    if (selectedSecretIds.length === 0) return;
+    pendingMoveIds = [...selectedSecretIds];
+    openMoveDialog();
+  }
+
+  function openMoveDialogForSecret(secretId: string): void {
+    const secret = snapshot.secrets.find((item) => item.id === secretId);
+    if (!secret) return;
+    pendingMoveIds = [secret.id];
+    openMoveDialog();
+  }
+
+  function openMoveDialog(): void {
+    moveTargetGroupId = "";
+    moveSourcePassword = "";
+    moveTargetPassword = "";
+    moveError = "";
+    showMoveDialog = true;
+  }
+
+  function closeMoveDialog(): void {
+    showMoveDialog = false;
+    moveError = "";
+  }
+
+  function selectMoveTarget(groupId: string): void {
+    moveTargetGroupId = groupId;
+    moveError = "";
+  }
+
+  const moveTargets = $derived(
+    snapshot.groups.filter((group) => group.id !== selectedGroup?.id),
+  );
+
+  const moveTargetGroup = $derived(
+    snapshot.groups.find((group) => group.id === moveTargetGroupId) ?? null,
+  );
+
+  async function confirmMove(): Promise<void> {
+    if (!selectedGroup || pendingMoveIds.length === 0) return;
+
+    const sourceGroup = selectedGroup;
+    const targetGroup = moveTargetGroup;
+    if (!targetGroup) {
+      moveError = "请选择目标分组";
+      return;
+    }
+
+    busy = true;
+    moveError = "";
+    try {
+      // Moving re-encrypts each secret with the target group key, so both
+      // groups need an authorized key in this context: the source key to
+      // decrypt, the target key to re-encrypt. Unlock whatever is still
+      // locked before asking the controller to move.
+      if (!sourceGroup.unlocked) {
+        if (!moveSourcePassword) {
+          throw new Error(`请输入源分组「${sourceGroup.name}」的口令`);
+        }
+        await vault.unlockGroup(contextId, sourceGroup.id, moveSourcePassword);
+      }
+      if (!targetGroup.unlocked) {
+        if (!moveTargetPassword) {
+          throw new Error(`请输入目标分组「${targetGroup.name}」的口令`);
+        }
+        await vault.unlockGroup(contextId, targetGroup.id, moveTargetPassword);
+      }
+
+      const moved = await vault.moveSecrets(contextId, [...pendingMoveIds], targetGroup.id);
+
+      showMessage(`已移动 ${moved} 个秘密到「${targetGroup.name}」`);
+      pendingMoveIds = [];
+      exitMultiSelect();
+      showMoveDialog = false;
+    } catch (error) {
+      moveError = error instanceof Error ? error.message : String(error);
+    } finally {
+      busy = false;
+    }
   }
 
   async function changePassword() {
@@ -505,6 +627,14 @@
 
         <div class="vault-search-row">
           <input class="b3-text-field" bind:value={filter} placeholder="搜索 label" />
+          {#if !multiSelectMode}
+            <button
+              class="vault-quiet-button"
+              title="多选"
+              aria-label="多选"
+              onclick={enterMultiSelect}
+            >多选</button>
+          {/if}
           <button
             class="vault-icon-button vault-add-secret"
             title="新建秘密"
@@ -515,16 +645,54 @@
         </div>
       </header>
 
-      <div class="vault-secret-list">
-        {#each filteredSecrets as secret}
+      {#if multiSelectMode}
+        <div class="vault-select-bar" role="toolbar" aria-label="多选操作">
+          <span class="vault-select-count">已选 {selectedSecretIds.length} 项</span>
+          <span class="vault-select-spacer" aria-hidden="true"></span>
           <button
-            class="vault-secret-row"
-            class:active={secret.id === selectedSecretId && detailMode === "view"}
-            onclick={() => selectSecret(secret)}
-          >
-            <span class="vault-secret-label">{secret.label}</span>
-            <span class="vault-secret-chevron" aria-hidden="true">›</span>
-          </button>
+            class="b3-button b3-button--text"
+            disabled={busy || selectedSecretIds.length === 0}
+            onclick={openMoveDialogFromSelection}
+          >移动到…</button>
+          <button class="vault-quiet-button" disabled={busy} onclick={exitMultiSelect}>取消</button>
+        </div>
+      {/if}
+
+      <div class="vault-secret-list" class:multi-active={multiSelectMode}>
+        {#each filteredSecrets as secret}
+          <div class="vault-secret-item">
+            <input
+              type="checkbox"
+              class="vault-secret-check"
+              aria-label={`选择 ${secret.label}`}
+              checked={selectedSecretIds.includes(secret.id)}
+              onclick={(event) => {
+                event.stopPropagation();
+                toggleSecretSelection(secret.id);
+              }}
+            />
+            <button
+              class="vault-secret-row"
+              class:active={secret.id === selectedSecretId && detailMode === "view"}
+              class:selection-active={selectedSecretIds.includes(secret.id)}
+              onclick={() => {
+                if (multiSelectMode) {
+                  toggleSecretSelection(secret.id);
+                } else {
+                  selectSecret(secret);
+                }
+              }}
+            >
+              <span class="vault-secret-label">{secret.label}</span>
+              <span class="vault-secret-chevron" aria-hidden="true">›</span>
+            </button>
+            <button
+              class="vault-secret-move"
+              title="移动到…"
+              aria-label={`移动 ${secret.label} 到其他分组`}
+              onclick={() => openMoveDialogForSecret(secret.id)}
+            >⇄</button>
+          </div>
         {:else}
           <div class="vault-empty-list">
             {filter ? "没有匹配的秘密" : "这个分组还没有秘密"}
@@ -599,6 +767,12 @@
               disabled={busy}
               onclick={copySelectedSecretReference}
             >复制为文档块</button>
+
+            <button
+              class="vault-quiet-button vault-move-button"
+              disabled={busy}
+              onclick={() => openMoveDialogForSecret(selectedSecret.id)}
+            >移动到…</button>
 
             <button
               class="vault-danger-link vault-detail-delete"
@@ -737,6 +911,82 @@
     </main>
   {/if}
 </div>
+
+{#if showMoveDialog}
+  <div
+    class="vault-modal-backdrop"
+    role="presentation"
+    onclick={(event) => {
+      if (event.target === event.currentTarget && !busy) closeMoveDialog();
+    }}
+  >
+    <section class="vault-modal vault-move-modal" role="dialog" aria-modal="true">
+      <h3>移动 {pendingMoveIds.length} 个秘密</h3>
+      <p class="vault-muted">
+        从「{selectedGroup?.name}」移动到目标分组。秘密 ID 不变，文档引用继续有效。
+      </p>
+
+      <label>
+        <span>目标分组</span>
+        <div class="vault-move-targets">
+          {#each moveTargets as target}
+            <button
+              class="vault-move-target"
+              class:selected={target.id === moveTargetGroupId}
+              onclick={() => selectMoveTarget(target.id)}
+            >
+              <span>{target.name}</span>
+              <span class="vault-move-target-meta">
+                {target.unlocked ? "已解锁" : target.initialized ? "已锁定 · 需要口令" : "未设口令 · 需要设置"}
+              </span>
+            </button>
+          {:else}
+            <div class="vault-empty-list">没有可移动到的分组</div>
+          {/each}
+        </div>
+      </label>
+
+      {#if selectedGroup && !selectedGroup.unlocked}
+        <label>
+          <span>源分组口令（{selectedGroup.name}）</span>
+          <input
+            class="b3-text-field"
+            type="password"
+            autocomplete="new-password"
+            bind:value={moveSourcePassword}
+            placeholder="输入源分组口令以解密"
+          />
+        </label>
+      {/if}
+
+      {#if moveTargetGroup && !moveTargetGroup.unlocked}
+        <label>
+          <span>目标分组口令（{moveTargetGroup.name}）</span>
+          <input
+            class="b3-text-field"
+            type="password"
+            autocomplete="new-password"
+            bind:value={moveTargetPassword}
+            placeholder="输入目标分组口令以加密"
+          />
+        </label>
+      {/if}
+
+      {#if moveError}
+        <div class="vault-error">{moveError}</div>
+      {/if}
+
+      <footer>
+        <button class="vault-quiet-button" disabled={busy} onclick={closeMoveDialog}>取消</button>
+        <button
+          class="b3-button b3-button--text"
+          disabled={busy || pendingMoveIds.length === 0}
+          onclick={confirmMove}
+        >移动</button>
+      </footer>
+    </section>
+  </div>
+{/if}
 
 {#if showPasswordDialog}
   <div

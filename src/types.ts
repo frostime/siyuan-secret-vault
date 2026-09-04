@@ -90,7 +90,8 @@ export type AuthorizationRevocationReason =
   | "vault-reloaded"
   | "password-changed"
   | "group-deleted"
-  | "secret-deleted";
+  | "secret-deleted"
+  | "secret-moved";
 
 /**
  * Capability revocation is intentionally distinct from ordinary Vault change.

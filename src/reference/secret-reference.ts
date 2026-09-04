@@ -183,7 +183,46 @@ export class SecretReferenceService {
 
   /** Checks the persistent authority before granting document interaction. */
   async matchesReference(blockId: string, secretId: string): Promise<boolean> {
+    return (await this.loadReference(blockId, secretId)) !== null;
+  }
+
+  /**
+   * Reads the reference block once and returns its attributes only when the
+   * block is still an authoritative v4 reference for `secretId`.
+   *
+   * Interaction callers need both identity validation and snapshot comparison;
+   * using this instead of a separate `getBlockAttrs` round trip keeps the
+   * click path at exactly one read.
+   */
+  async loadReference(
+    blockId: string,
+    secretId: string,
+  ): Promise<Record<string, string> | null> {
     const attrs = await getBlockAttrs(blockId);
+    return this.isAuthoritativeReference(attrs, secretId) ? attrs : null;
+  }
+
+  /**
+   * Pure comparison of the persisted snapshot attributes against live Vault
+   * data. A difference means the block text and attributes are stale and
+   * should be refreshed on explicit reference interaction.
+   */
+  snapshotNeedsRefresh(
+    attrs: Record<string, string>,
+    secret: SecretReferenceSource,
+    groupName: string,
+  ): boolean {
+    return attrs["custom-secret-label"] !== secret.label
+      || attrs["custom-secret-group"] !== secret.groupId
+      || attrs["custom-secret-group-name"] !== groupName
+      || attrs["custom-secret-created-at"] !== String(secret.createdAt)
+      || attrs["custom-secret-updated-at"] !== String(secret.updatedAt);
+  }
+
+  private isAuthoritativeReference(
+    attrs: Record<string, string>,
+    secretId: string,
+  ): boolean {
     return attrs["custom-secret-vault"] === "1"
       && attrs["custom-secret-version"] === SECRET_REFERENCE_VERSION
       && attrs["custom-secret-id"] === secretId;
