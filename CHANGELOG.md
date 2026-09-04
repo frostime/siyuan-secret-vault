@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - 修复新增分组卡片中口令/名称输入框宽度溢出窄列的问题。
+- 删除秘密/分组与执行迁移的原生确认弹窗替换为插件内的确认对话框。
 
 ## [0.2.0] - 2026-08-26
 
