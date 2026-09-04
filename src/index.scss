@@ -259,6 +259,13 @@
   gap: 8px;
 }
 
+/* Text fields carry an intrinsic width that would otherwise stretch the
+   creator card past the narrow groups column; force them to the card width. */
+.vault-group-creator .b3-text-field {
+  width: 100%;
+  min-width: 0;
+}
+
 .vault-group-creator label,
 .vault-editor-form label,
 .vault-modal label {
