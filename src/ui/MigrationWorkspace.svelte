@@ -87,3 +87,234 @@
     <div class="vault-detail-empty">当前没有迁移任务。</div>
   {/if}
 </main>
+
+<style>
+  .vault-migration-workspace {
+    grid-column: 2 / 4;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    background: var(--b3-theme-background);
+  }
+
+  .vault-migration-panel {
+    width: min(920px, 100%);
+    margin: 0 auto;
+    padding: clamp(20px, 4vw, 42px);
+  }
+
+  .vault-migration-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 22px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--b3-border-color);
+  }
+
+  .vault-migration-header > div {
+    min-width: 0;
+  }
+
+  .vault-migration-header h1 {
+    margin: 5px 0 0;
+    font-size: var(--sv-text-large);
+    font-weight: var(--sv-weight-strong);
+    letter-spacing: -.025em;
+  }
+
+  .vault-migration-header p {
+    max-width: 650px;
+    margin: 8px 0 0;
+    font-size: var(--sv-text-small);
+    line-height: var(--sv-leading-relaxed);
+    opacity: .6;
+  }
+
+  .vault-migration-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 20px;
+  }
+
+  .vault-migration-summary > div {
+    display: grid;
+    gap: 2px;
+    padding: 12px 14px;
+    border: 1px solid var(--b3-border-color);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--b3-theme-surface, var(--b3-theme-background)) 52%, var(--b3-theme-background));
+  }
+
+  .vault-migration-summary strong {
+    font-size: var(--sv-text-large);
+    font-weight: var(--sv-weight-strong);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .vault-migration-summary span {
+    font-size: var(--sv-text-small);
+    opacity: .5;
+  }
+
+  .vault-migration-summary .warn strong {
+    color: var(--sv-danger-color);
+  }
+
+  .vault-migration-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 12px;
+    padding: 8px 0 12px;
+    border-bottom: 1px solid var(--b3-border-color);
+  }
+
+  .vault-migration-actions > span {
+    font-size: var(--sv-text-small);
+    opacity: .5;
+  }
+
+  .vault-migration-items {
+    display: grid;
+    gap: 1px;
+    margin-top: 8px;
+    border: 1px solid var(--b3-border-color);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .vault-migration-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 11px 12px;
+    background: var(--b3-theme-background);
+    border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 70%, transparent);
+  }
+
+  .vault-migration-item:last-child {
+    border-bottom: 0;
+  }
+
+  .vault-migration-item.issue {
+    background: color-mix(in srgb, var(--b3-card-error-background, rgba(200,0,0,.06)) 48%, var(--b3-theme-background));
+  }
+
+  .vault-migration-item-main {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .vault-migration-item-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font-size: var(--sv-text-normal);
+  }
+
+  .vault-migration-item-title strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vault-migration-status {
+    display: inline-grid;
+    width: 17px;
+    height: 17px;
+    place-items: center;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: var(--b3-list-hover);
+    font-size: 10px;
+  }
+
+  .vault-migration-item.issue .vault-migration-status {
+    color: var(--b3-card-error-color, #c33);
+  }
+
+  .vault-migration-path,
+  .vault-migration-note {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--sv-text-small);
+    opacity: .48;
+  }
+
+  .vault-migration-note {
+    opacity: .62;
+  }
+
+  .vault-block-id {
+    flex: 0 0 auto;
+    padding: 4px 7px;
+    border-radius: var(--sv-radius-small);
+    color: inherit;
+    text-decoration: none;
+    font-size: var(--sv-text-small);
+    opacity: .54;
+  }
+
+  .vault-migration-empty,
+  .vault-migration-intro,
+  .vault-migration-result {
+    margin-top: 18px;
+    padding: 16px;
+    border: var(--sv-border);
+    border-radius: var(--sv-radius-normal);
+    background: color-mix(
+      in srgb,
+      var(--b3-theme-surface, var(--b3-theme-background)) 48%,
+      var(--b3-theme-background)
+    );
+    font-size: var(--sv-text-small);
+  }
+
+  .vault-migration-intro p {
+    max-width: 680px;
+    margin: 6px 0 0;
+    line-height: var(--sv-leading-relaxed);
+    opacity: .58;
+  }
+
+  .vault-migration-result details {
+    margin-top: 8px;
+  }
+
+  .vault-migration-result ul {
+    margin: 8px 0 0;
+    padding-left: 20px;
+  }
+
+  .vault-migration-result li {
+    margin: 4px 0;
+    line-height: 1.5;
+  }
+
+  .vault-migration-future {
+    margin-top: 30px;
+    padding-top: 14px;
+    border-top: 1px solid var(--b3-border-color);
+    font-size: var(--sv-text-small);
+    opacity: .42;
+  }
+
+  @media (max-width: 760px) {
+    .vault-migration-header,
+    .vault-migration-actions {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .vault-migration-summary {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

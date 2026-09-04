@@ -121,3 +121,226 @@
     </div>
   {/if}
 </main>
+
+<style>
+  .vault-detail {
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    background: var(--b3-theme-background);
+  }
+
+  .vault-detail-panel {
+    display: flex;
+    min-height: 100%;
+    flex-direction: column;
+    padding: clamp(18px, 3vw, 34px);
+  }
+
+  .vault-detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--b3-border-color);
+  }
+
+  .vault-detail-title {
+    min-width: 0;
+  }
+
+  .vault-detail-header h1 {
+    margin: 4px 0 0;
+    overflow-wrap: anywhere;
+    font-size: var(--sv-text-large);
+    font-weight: var(--sv-weight-strong);
+    letter-spacing: -.025em;
+  }
+
+  .vault-detail-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .vault-detail-delete {
+    margin-left: 5px;
+    padding: 5px 8px;
+    border-radius: 6px;
+  }
+
+  .vault-detail-delete:not(:disabled):hover {
+    background: color-mix(
+      in srgb,
+      var(--b3-card-error-color, #c33) 9%,
+      transparent
+    );
+    text-decoration: none;
+  }
+
+  .vault-move-button {
+    color: var(--b3-theme-primary);
+  }
+
+  .vault-content-section,
+  .vault-metadata {
+    margin-top: 22px;
+  }
+
+  .vault-content-view,
+  .vault-locked-content,
+  .vault-content-placeholder {
+    margin: 8px 0 0;
+    border: var(--sv-border);
+    border-radius: var(--sv-radius-normal);
+    background: var(--sv-surface-soft);
+  }
+
+  .vault-content-view {
+    min-height: 132px;
+    max-height: min(46vh, 480px);
+    overflow: auto;
+    padding: 13px 14px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font:
+      var(--sv-text-normal) /
+      var(--sv-leading-relaxed)
+      var(--b3-font-family-code);
+  }
+
+  /* SiYuan's .layout-tab-container sets user-select: none, which would make
+     the vault contents unselectable; restore selection for the content area.
+     The scoped class keeps specificity above the global tab rule. */
+  .vault-content-view {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .vault-content-placeholder {
+    padding: 30px 14px;
+    text-align: center;
+    font-size: var(--sv-text-small);
+    opacity: .55;
+  }
+
+  .vault-locked-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .vault-lock-glyph {
+    margin-top: 1px;
+  }
+
+  .vault-locked-content strong {
+    font-size: var(--sv-text-normal);
+  }
+
+  .vault-locked-content p {
+    max-width: 560px;
+    margin: 4px 0 0;
+    font-size: var(--sv-text-small);
+    line-height: var(--sv-leading-relaxed);
+    opacity: .58;
+  }
+
+  .vault-metadata dl {
+    display: grid;
+    gap: 0;
+    max-width: 560px;
+    margin: 8px 0 0;
+  }
+
+  .vault-metadata dl > div {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 14px;
+    padding: 8px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--b3-border-color) 68%, transparent);
+  }
+
+  .vault-metadata dt,
+  .vault-metadata dd {
+    margin: 0;
+    font-size: var(--sv-text-small);
+  }
+
+  .vault-metadata dt {
+    opacity: .52;
+  }
+
+  .vault-metadata dd {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .vault-detail-empty-icon {
+    margin-bottom: 4px;
+    font-size: 24px;
+  }
+
+  .vault-detail-empty span {
+    font-size: var(--sv-text-small);
+  }
+
+  .vault-editor-form {
+    display: grid;
+    gap: 14px;
+    margin-top: 20px;
+  }
+
+  .vault-editor-content-field {
+    min-height: 0;
+  }
+
+  .vault-detail-textarea {
+    min-height: 260px;
+    resize: vertical;
+    font-family: var(--b3-font-family-code);
+    line-height: 1.5;
+  }
+
+  .vault-editor-form label {
+    display: grid;
+    gap: 5px;
+    font-size: var(--sv-text-small);
+  }
+
+  .vault-detail-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 14px;
+  }
+
+  @media (max-width: 920px) {
+    .vault-detail-panel {
+      padding: 20px;
+    }
+
+    .vault-detail-header {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .vault-detail-toolbar {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .vault-detail {
+      min-height: 420px;
+    }
+
+    .vault-metadata dl > div {
+      grid-template-columns: 92px minmax(0, 1fr);
+    }
+  }
+</style>

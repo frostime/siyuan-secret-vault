@@ -136,3 +136,216 @@
     {/if}
   {/if}
 </section>
+
+<style>
+  .vault-secrets {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    flex-direction: column;
+    border-right: 1px solid var(--b3-border-color);
+    background: var(--b3-theme-background);
+  }
+
+  .vault-list-header {
+    padding: 14px 12px 10px;
+    border-bottom: 1px solid var(--b3-border-color);
+  }
+
+  .vault-list-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .vault-list-title-row > div:first-child {
+    min-width: 0;
+  }
+
+  .vault-list-title-row h2 {
+    display: inline;
+    margin: 0;
+    font-size: var(--sv-text-normal);
+    font-weight: var(--sv-weight-strong);
+  }
+
+  .vault-status-badge {
+    display: inline-flex;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: var(--sv-radius-pill);
+    background: var(--b3-theme-surface, var(--b3-list-hover));
+    font-size: var(--sv-text-small);
+    line-height: var(--sv-leading-normal);
+    opacity: .68;
+    vertical-align: 1px;
+  }
+
+  .vault-status-badge.unlocked {
+    color: var(--b3-theme-primary);
+    opacity: 1;
+  }
+
+  .vault-list-actions {
+    display: flex;
+    gap: 2px;
+  }
+
+  .vault-unlock-row,
+  .vault-search-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .vault-unlock-row input,
+  .vault-search-row input {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .vault-add-secret {
+    flex: 0 0 auto;
+  }
+
+  .vault-secret-list {
+    min-height: 0;
+    overflow: auto;
+    flex: 1;
+    padding: 6px;
+  }
+
+  .vault-secret-row {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 8px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .vault-secret-row:hover {
+    background: var(--b3-list-hover);
+  }
+
+  .vault-secret-row.active {
+    background: var(--b3-list-hover);
+    box-shadow: inset 2px 0 0 var(--b3-theme-primary);
+  }
+
+  .vault-secret-row.selection-active {
+    background: var(--b3-list-hover);
+  }
+
+  /* Multi-select is an explicit mode: the checkbox sits outside the row button
+     (interactive content must not nest inside a button) and only takes layout
+     space while the mode is active, so the normal list keeps its original
+     layout with no leading placeholder. */
+  .vault-secret-item {
+    display: flex;
+    align-items: center;
+    position: relative;
+  }
+
+  .vault-secret-check {
+    display: none;
+  }
+
+  .vault-secret-list.multi-active .vault-secret-check {
+    display: block;
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    margin: 0 2px 0 5px;
+    accent-color: var(--b3-theme-primary);
+    cursor: pointer;
+  }
+
+  /* Single-secret quick move: an overlay button fades in over the chevron on
+     row hover. It is absolutely positioned, so the normal row layout never
+     shifts. Hidden while multi-select is active (rows then toggle selection). */
+  .vault-secret-move {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--b3-theme-primary);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+  }
+
+  .vault-secret-list:not(.multi-active) .vault-secret-item:hover .vault-secret-move {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .vault-secret-item:hover .vault-secret-chevron {
+    opacity: 0;
+  }
+
+  .vault-select-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-top: 1px solid var(--b3-border-color);
+    border-bottom: 1px solid var(--b3-border-color);
+    background: color-mix(
+      in srgb,
+      var(--b3-theme-primary) 7%,
+      transparent
+    );
+  }
+
+  .vault-select-count {
+    font-size: var(--sv-text-small);
+    color: var(--b3-theme-primary);
+  }
+
+  .vault-select-spacer {
+    flex: 1;
+  }
+
+  .vault-secret-label {
+    min-width: 0;
+    overflow: hidden;
+    flex: 1;
+    font-size: var(--sv-text-normal);
+    font-weight: var(--sv-weight-medium);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vault-secret-chevron {
+    font-size: 17px;
+    opacity: .32;
+  }
+
+  .vault-list-footer {
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--b3-border-color);
+  }
+
+  @media (max-width: 720px) {
+    .vault-secrets {
+      height: 280px;
+      border-right: 0;
+      border-bottom: 1px solid var(--b3-border-color);
+    }
+  }
+</style>

@@ -157,3 +157,140 @@
     <div class="secret-popover-message">{noticeText}</div>
   {/if}
 </section>
+
+<style>
+  /* Host is created by secret-interaction.ts (outside this component). */
+  :global(.secret-vault-popover-root) {
+    position: fixed;
+    z-index: 211;
+    box-sizing: border-box;
+    max-width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    overflow: auto;
+    border: var(--sv-border);
+    border-radius: var(--sv-radius-large);
+    background: var(--b3-theme-background);
+    color: var(--b3-theme-on-background);
+    box-shadow: var(--b3-dialog-shadow);
+    font-family: var(--b3-font-family);
+    font-size: var(--sv-text-normal);
+  }
+
+  .secret-popover-panel {
+    padding: 11px;
+  }
+
+  .secret-popover-header,
+  .secret-popover-header-actions,
+  .secret-popover-inline-row,
+  .secret-popover-actions {
+    display: flex;
+    align-items: center;
+  }
+
+  .secret-popover-header {
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 9px;
+  }
+
+  .secret-popover-identity {
+    min-width: 0;
+  }
+
+  .secret-popover-identity strong {
+    display: block;
+    overflow: hidden;
+    font-size: var(--sv-text-normal);
+    line-height: var(--sv-leading-tight);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .secret-popover-identity span {
+    display: block;
+    margin-top: 2px;
+    color: var(--b3-theme-on-surface);
+    font-size: var(--sv-text-small);
+  }
+
+  .secret-popover-header-actions {
+    flex: 0 0 auto;
+    gap: 6px;
+  }
+
+  .secret-popover-state {
+    font-size: var(--sv-text-normal);
+  }
+
+  .secret-popover-close {
+    min-width: 28px;
+    padding: 2px 7px;
+    font-size: 17px;
+    line-height: 1.2;
+  }
+
+  .secret-popover-unlock p {
+    margin: 2px 0 9px;
+    color: var(--b3-theme-on-surface);
+    font-size: var(--sv-text-small);
+    line-height: var(--sv-leading-normal);
+  }
+
+  .secret-popover-inline-row {
+    gap: 7px;
+  }
+
+  .secret-popover-content {
+    box-sizing: border-box;
+    min-height: 78px;
+    max-height: min(320px, 45vh);
+    margin: 0 0 8px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    border: var(--sv-border);
+    border-radius: var(--sv-radius-small);
+    background: var(--b3-theme-surface);
+    padding: 8px 9px;
+    font:
+      var(--sv-text-normal) /
+      var(--sv-leading-normal)
+      var(--b3-font-family-code);
+  }
+
+  .secret-popover-editor {
+    display: grid;
+    gap: 7px;
+  }
+
+  .secret-popover-textarea {
+    min-height: 140px;
+    max-height: 45vh;
+    resize: vertical;
+    font:
+      var(--sv-text-normal) /
+      var(--sv-leading-normal)
+      var(--b3-font-family-code);
+  }
+
+  .secret-popover-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .secret-popover-actions--end {
+    justify-content: flex-end;
+  }
+
+  .secret-popover-message {
+    margin-top: 8px;
+    color: var(--b3-theme-on-surface);
+    font-size: var(--sv-text-small);
+    line-height: var(--sv-leading-tight);
+  }
+
+  .secret-popover-message--error {
+    color: var(--sv-danger-color);
+  }
+</style>
