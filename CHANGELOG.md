@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 移动的秘密改用目标分组密钥重新加密；秘密 ID 与创建时间保持不变，文档引用在移动后继续有效，分组口令保持各自独立。
 
+### Fixed
+
+- 修复新增分组卡片中口令/名称输入框宽度溢出窄列的问题。
+
 ## [0.2.0] - 2026-08-26
 
 ### Added
