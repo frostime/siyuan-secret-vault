@@ -369,26 +369,58 @@
   background: var(--b3-list-hover);
 }
 
-/* Multi-select: the checkbox sits outside the row button (interactive
-   content must not nest inside a button) and reveals on hover. */
+/* Multi-select is an explicit mode: the checkbox sits outside the row button
+   (interactive content must not nest inside a button) and only takes layout
+   space while the mode is active, so the normal list keeps its original
+   layout with no leading placeholder. */
 .vault-secret-item {
   display: flex;
   align-items: center;
+  position: relative;
 }
 
 .vault-secret-check {
+  display: none;
+}
+
+.vault-secret-list.multi-active .vault-secret-check {
+  display: block;
   flex: 0 0 auto;
   width: 15px;
   height: 15px;
   margin: 0 2px 0 5px;
   accent-color: var(--b3-theme-primary);
   cursor: pointer;
-  visibility: hidden;
 }
 
-.vault-secret-item:hover .vault-secret-check,
-.vault-secret-check:checked {
-  visibility: visible;
+/* Single-secret quick move: an overlay button fades in over the chevron on
+   row hover. It is absolutely positioned, so the normal row layout never
+   shifts. Hidden while multi-select is active (rows then toggle selection). */
+.vault-secret-move {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--b3-theme-primary);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.vault-secret-list:not(.multi-active) .vault-secret-item:hover .vault-secret-move {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.vault-secret-item:hover .vault-secret-chevron {
+  opacity: 0;
 }
 
 .vault-select-bar {

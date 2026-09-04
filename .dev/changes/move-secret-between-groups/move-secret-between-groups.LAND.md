@@ -41,14 +41,17 @@ src/interaction/secret-interaction.ts           modify  (+18/-12)
   - 若 snapshotNeedsRefresh → 异步 refreshSnapshot + showMessage；失败仅非阻断警告。
   ~30 行净改动，职责不变（仍是唯一弹框生命周期所有者）。
 
-src/ui/VaultApp.svelte                          modify  (+170/-15)
-  - 列表行勾选框（hover 显现）+ 多选操作条（已选 N 项 / 移动到… / 取消）；
+src/ui/VaultApp.svelte                          modify  (+180/-20)
+  - 列表行 hover 时右端淡入「⇄」快捷按钮（绝对定位覆盖 chevron，零布局影响），
+    点击直接打开单条移动对话框；
+  - 头部「多选」进入显式多选模式：checkbox 才显示（平时不占位），
+    操作条（已选 N 项 / 移动到… / 取消），行点击切换勾选；
   - 「移动到…」modal（与现有 showPasswordDialog 同模式）：目标分组单选
     （排除当前组）、源/目标口令按锁定状态显示、错误提示、确认；
   - 确认流程：unlockGroup(源) → unlockGroup(目标) → moveSecrets →
-    showMessage 成功消息、清空勾选、刷新列表（视图停留原分组）；
+    showMessage 成功消息、退出多选、刷新列表（视图停留原分组）；
   - 详情面板工具条新增「移动到…」（单条，复用同一 modal）。
-  约 +170 行，集中在列表/对话框两段，不重排现有结构。
+  约 +180 行，集中在列表/对话框两段，不重排现有结构。
 
 无新文件、无新依赖、无 schema 变更（VaultData 结构不变）。
 ```

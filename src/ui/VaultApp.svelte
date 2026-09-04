@@ -52,6 +52,9 @@
 
   // Multi-select move state. Selected secret ids always belong to the group
   // currently shown in the list, so the source group is `selectedGroup`.
+  // The mode is explicit: checkboxes only appear after the user enters it, so
+  // the normal list keeps its original layout with no leading placeholder.
+  let multiSelectMode = $state(false);
   let selectedSecretIds = $state<string[]>([]);
   let showMoveDialog = $state(false);
   let pendingMoveIds = $state<string[]>([]);
@@ -153,7 +156,7 @@
     editingSecretId = null;
     unlockPassword = "";
     errorText = "";
-    selectedSecretIds = [];
+    exitMultiSelect();
     selectedSecretId = snapshot.secrets.find((secret) => secret.groupId === groupId)?.id ?? null;
     void refreshDetailContent();
   }
@@ -320,14 +323,20 @@
 
   // ---- move secrets to another group ----
 
+  function enterMultiSelect(): void {
+    selectedSecretIds = [];
+    multiSelectMode = true;
+  }
+
+  function exitMultiSelect(): void {
+    multiSelectMode = false;
+    selectedSecretIds = [];
+  }
+
   function toggleSecretSelection(secretId: string): void {
     selectedSecretIds = selectedSecretIds.includes(secretId)
       ? selectedSecretIds.filter((id) => id !== secretId)
       : [...selectedSecretIds, secretId];
-  }
-
-  function clearSelection(): void {
-    selectedSecretIds = [];
   }
 
   function openMoveDialogFromSelection(): void {
@@ -336,9 +345,10 @@
     openMoveDialog();
   }
 
-  function openMoveDialogFromDetail(): void {
-    if (!selectedSecret) return;
-    pendingMoveIds = [selectedSecret.id];
+  function openMoveDialogForSecret(secretId: string): void {
+    const secret = snapshot.secrets.find((item) => item.id === secretId);
+    if (!secret) return;
+    pendingMoveIds = [secret.id];
     openMoveDialog();
   }
 
@@ -401,8 +411,8 @@
       const moved = await vault.moveSecrets(contextId, [...pendingMoveIds], targetGroup.id);
 
       showMessage(`已移动 ${moved} 个秘密到「${targetGroup.name}」`);
-      selectedSecretIds = [];
       pendingMoveIds = [];
+      exitMultiSelect();
       showMoveDialog = false;
     } catch (error) {
       moveError = error instanceof Error ? error.message : String(error);
@@ -617,6 +627,14 @@
 
         <div class="vault-search-row">
           <input class="b3-text-field" bind:value={filter} placeholder="搜索 label" />
+          {#if !multiSelectMode}
+            <button
+              class="vault-quiet-button"
+              title="多选"
+              aria-label="多选"
+              onclick={enterMultiSelect}
+            >多选</button>
+          {/if}
           <button
             class="vault-icon-button vault-add-secret"
             title="新建秘密"
@@ -627,20 +645,20 @@
         </div>
       </header>
 
-      {#if selectedSecretIds.length > 0}
+      {#if multiSelectMode}
         <div class="vault-select-bar" role="toolbar" aria-label="多选操作">
           <span class="vault-select-count">已选 {selectedSecretIds.length} 项</span>
           <span class="vault-select-spacer" aria-hidden="true"></span>
           <button
             class="b3-button b3-button--text"
-            disabled={busy}
+            disabled={busy || selectedSecretIds.length === 0}
             onclick={openMoveDialogFromSelection}
           >移动到…</button>
-          <button class="vault-quiet-button" disabled={busy} onclick={clearSelection}>取消</button>
+          <button class="vault-quiet-button" disabled={busy} onclick={exitMultiSelect}>取消</button>
         </div>
       {/if}
 
-      <div class="vault-secret-list">
+      <div class="vault-secret-list" class:multi-active={multiSelectMode}>
         {#each filteredSecrets as secret}
           <div class="vault-secret-item">
             <input
@@ -657,11 +675,23 @@
               class="vault-secret-row"
               class:active={secret.id === selectedSecretId && detailMode === "view"}
               class:selection-active={selectedSecretIds.includes(secret.id)}
-              onclick={() => selectSecret(secret)}
+              onclick={() => {
+                if (multiSelectMode) {
+                  toggleSecretSelection(secret.id);
+                } else {
+                  selectSecret(secret);
+                }
+              }}
             >
               <span class="vault-secret-label">{secret.label}</span>
               <span class="vault-secret-chevron" aria-hidden="true">›</span>
             </button>
+            <button
+              class="vault-secret-move"
+              title="移动到…"
+              aria-label={`移动 ${secret.label} 到其他分组`}
+              onclick={() => openMoveDialogForSecret(secret.id)}
+            >⇄</button>
           </div>
         {:else}
           <div class="vault-empty-list">
@@ -741,7 +771,7 @@
             <button
               class="vault-quiet-button vault-move-button"
               disabled={busy}
-              onclick={openMoveDialogFromDetail}
+              onclick={() => openMoveDialogForSecret(selectedSecret.id)}
             >移动到…</button>
 
             <button
