@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>原型：移动秘密到其他分组 · Secret Vault</title>
+<style>
+  :root {
+    --b3-font: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --border: #dedede;
+    --text: #1e1e1e;
+    --muted: #8a8a8a;
+    --bg: #f7f7f7;
+    --panel: #ffffff;
+    --accent: #3b82f6;
+    --danger: #d84a4a;
+    --warn: #b45309;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--b3-font);
+    background: #e9e9e9;
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  /* ---------- review chrome ---------- */
+  .review-bar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: #1f2937; color: #e5e7eb;
+    display: flex; align-items: center; gap: 16px;
+    padding: 8px 16px; font-size: 13px;
+  }
+  .review-bar strong { color: #fbbf24; }
+  .review-bar button {
+    background: #374151; color: #e5e7eb; border: 1px solid #4b5563;
+    border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px;
+  }
+  .review-bar button.on { background: #2563eb; border-color: #2563eb; }
+  .review-note { margin-left: auto; color: #9ca3af; }
+
+  /* ---------- window chrome (schematic) ---------- */
+  .window { margin: 56px auto 24px; max-width: 1180px; background: var(--bg); border-radius: 8px; overflow: hidden; box-shadow: 0 8px 30px rgba(0,0,0,.18); }
+  .titlebar {
+    background: #f0f0f0; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px; padding: 6px 12px; font-size: 13px; color: #555;
+  }
+  .titlebar .tab { display: flex; align-items: center; gap: 6px; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 3px 10px; }
+  .titlebar .tab.active { border-color: #bbb; }
+
+  .shell { display: grid; grid-template-columns: 230px 340px 1fr; min-height: 520px; }
+
+  /* ---------- left: groups ---------- */
+  .groups { background: #fbfbfb; border-right: 1px solid var(--border); padding: 12px; }
+  .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 10px; }
+  .group { display: block; width: 100%; text-align: left; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 8px 10px; margin-bottom: 4px; cursor: pointer; }
+  .group:hover { background: #f0f0f0; }
+  .group.active { background: #e8f0fe; border-color: #d3e2fb; }
+  .group .g-name { font-weight: 600; }
+  .group .g-meta { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* ---------- middle: secret list ---------- */
+  .list { background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  .list-head { padding: 12px 14px 8px; }
+  .list-head h2 { margin: 0 0 4px; font-size: 16px; }
+  .badge { font-size: 12px; color: var(--muted); }
+  .unlock-row { display: flex; gap: 6px; margin-top: 8px; }
+  .unlock-row input, .search-row input {
+    flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  }
+  .btn-mini { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
+  .search-row { display: flex; gap: 6px; margin: 10px 0 6px; }
+
+  /* multi-select action bar (NEW) */
+  .select-bar {
+    display: flex; align-items: center; gap: 10px; margin: 0;
+    padding: 8px 14px; background: #eef4ff; border-top: 1px solid #dbe7fb; border-bottom: 1px solid #dbe7fb;
+    font-size: 13px; color: #1d4ed8;
+  }
+  .select-bar .spacer { flex: 1; }
+  .select-bar .btn-primary { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
+  .select-bar .btn-primary:disabled { opacity: .5; cursor: default; }
+
+  .rows { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .row {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    background: transparent; border: none; padding: 8px 14px; cursor: pointer; font-size: 14px; color: var(--text);
+  }
+  .row:hover { background: #f5f5f5; }
+  .row.active { background: #eef4ff; }
+  .row .cb {
+    width: 16px; height: 16px; flex: none; accent-color: #2563eb;
+    opacity: 0; cursor: pointer; margin: 0;
+  }
+  .row:hover .cb, .row.selection-active .cb { opacity: 1; }
+  .row .label { flex: 1; }
+  .row .chev { color: #bbb; }
+  .row.blurred span { color: #c7c7c7; }
+
+  /* ---------- right: detail ---------- */
+  .detail { background: var(--panel); padding: 18px 22px; }
+  .eyebrow { font-size: 11px; letter-spacing: .08em; color: var(--muted); }
+  .detail h1 { margin: 4px 0 10px; font-size: 18px; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+  .toolbar button { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
+  .toolbar button:disabled { color: #bbb; cursor: default; }
+  .toolbar button.new { border-color: #93c5fd; background: #eff6ff; color: #1d4ed8; }
+  .toolbar button.new:hover { background: #dbeafe; }
+  .toolbar .danger { color: var(--danger); }
+  .section-label { font-size: 12px; letter-spacing: .06em; color: var(--muted); margin: 18px 0 8px; }
+  .locked-box {
+    display: flex; gap: 10px; background: #fafafa; border: 1px solid var(--border); border-radius: 8px; padding: 14px;
+    color: #555;
+  }
+  .locked-box p { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+  dl { margin: 0; }
+  dl > div { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; }
+  .hint-box { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 8px; padding: 10px 12px; font-size: 12px; margin-top: 10px; }
+
+  /* ---------- move modal ---------- */
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center; z-index: 90;
+  }
+  .modal {
+    width: 420px; max-width: calc(100vw - 32px); background: #fff; border-radius: 10px;
+    padding: 18px 20px; box-shadow: 0 12px 40px rgba(0,0,0,.3);
+  }
+  .modal h3 { margin: 0 0 4px; font-size: 16px; }
+  .modal .muted { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .modal label { display: block; font-size: 13px; margin-bottom: 10px; }
+  .modal label > span { display: block; margin-bottom: 4px; color: #444; }
+  .modal input[type="text"], .modal input[type="password"] {
+    width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit;
+  }
+  .target-list { display: flex; flex-direction: column; gap: 6px; }
+  .target-item {
+    display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer;
+  }
+  .target-item:hover { border-color: #93c5fd; }
+  .target-item.selected { border-color: #2563eb; background: #eff6ff; }
+  .target-item .t-meta { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .modal .error { color: var(--danger); font-size: 12px; margin: 4px 0; min-height: 16px; }
+  .modal footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .modal footer button { border-radius: 6px; padding: 6px 16px; cursor: pointer; font-size: 13px; }
+  .modal .btn-quiet { background: #fff; border: 1px solid var(--border); }
+  .modal .btn-primary { background: #2563eb; color: #fff; border: none; }
+  .modal .btn-primary:disabled { opacity: .5; cursor: default; }
+
+  /* ---------- reference demo view ---------- */
+  .doc { max-width: 720px; margin: 56px auto 24px; background: #fff; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,.18); padding: 28px 40px 40px; }
+  .doc h1 { font-size: 22px; margin: 0 0 4px; }
+  .doc .doc-meta { color: var(--muted); font-size: 12px; margin-bottom: 24px; }
+  .doc .para { position: relative; padding: 12px 14px; border-radius: 8px; border: 1px solid transparent; }
+  .doc .para.updated { border-color: #bbf7d0; background: #f0fdf4; }
+  .doc .snap-link { color: #2563eb; cursor: pointer; text-decoration: underline; }
+  .timeline { margin-top: 26px; border-top: 1px solid #eee; padding-top: 14px; }
+  .timeline h4 { margin: 0 0 8px; font-size: 13px; color: #444; }
+  .timeline ol { margin: 0; padding-left: 20px; font-size: 12px; color: #666; line-height: 1.9; }
+  .timeline li.done { color: #15803d; }
+
+  /* popover (schematic) */
+  .popover-demo {
+    margin-top: 22px; border: 1px solid #e3e3e3; border-radius: 10px; background: #fff;
+    box-shadow: 0 6px 24px rgba(0,0,0,.12); padding: 16px 18px;
+  }
+  .popover-demo .p-head { display: flex; justify-content: space-between; align-items: center; }
+  .popover-demo .p-eyebrow { font-size: 11px; color: var(--muted); letter-spacing: .08em; }
+  .popover-demo h3 { margin: 2px 0 10px; font-size: 15px; }
+
+  /* toast */
+  .toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+    background: #111827; color: #fff; border-radius: 8px; padding: 10px 16px; font-size: 13px;
+    opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 200; max-width: 80vw;
+  }
+  .toast.show { opacity: 1; }
+
+  .section-gap { margin-top: 12px; }
+  .test-cases { font-size: 12px; color: #666; }
+  .test-cases b { color: #333; }
+  .demo-controls { display: flex; gap: 8px; align-items: center; margin: 16px 0 0; }
+  .demo-controls button { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<div class="review-bar">
+  <strong>UI 原型 · 移动秘密到其他分组</strong>
+  <span>这不是生产代码，仅用于评审交互形态</span>
+  <button id="btnWorkbench" class="on">① 工作台：多选 + 移动</button>
+  <button id="btnReference">② 文档：点击引用刷新快照</button>
+  <span class="review-note">假数据 · 可直接操作</span>
+</div>
+
+<!-- ==================== VIEW 1: WORKBENCH ==================== -->
+<div id="viewWorkbench">
+  <div class="window">
+    <div class="titlebar">
+      <span>Neuro Agent 大项目工作</span>
+      <span class="tab active">🔐 秘密库</span>
+    </div>
+    <div class="shell">
+      <!-- groups -->
+      <aside class="groups">
+        <div class="brand">🔐 Secret Vault</div>
+        <button class="group" data-group="default">
+          <span class="g-name">default</span><span class="g-meta"><span data-count="default">12</span> · 已锁定</span>
+        </button>
+        <button class="group active" data-group="api">
+          <span class="g-name">API</span><span class="g-meta"><span data-count="api">2</span> · 已锁定</span>
+        </button>
+        <button class="group" data-group="work">
+          <span class="g-name">工作</span><span class="g-meta"><span data-count="work">1</span> · 已解锁</span>
+        </button>
+        <div class="hint-box" style="margin-top:16px">原型新增：勾选行 → 「移动到…」</div>
+      </aside>
+
+      <!-- list -->
+      <section class="list">
+        <header class="list-head">
+          <h2 id="listGroupName">API</h2>
+          <span class="badge" id="listGroupBadge">已锁定</span>
+          <div class="unlock-row">
+            <input type="password" placeholder="输入分组口令" />
+            <button class="btn-mini">解锁</button>
+          </div>
+          <div class="search-row">
+            <input type="text" placeholder="搜索 label" />
+            <button class="btn-mini" disabled title="原型锁定态">+</button>
+          </div>
+        </header>
+
+        <!-- NEW: multi-select action bar -->
+        <div class="select-bar" id="selectBar" hidden>
+          <span id="selectCount">已选 0 项</span>
+          <span class="spacer"></span>
+          <button class="btn-primary" id="btnMove" disabled>移动到…</button>
+          <button class="btn-mini" id="btnClearSelect">取消</button>
+        </div>
+
+        <div class="rows" id="secretRows"></div>
+      </section>
+
+      <!-- detail -->
+      <main class="detail">
+        <div id="detailEmpty">
+          <div class="eyebrow">SECRET VAULT</div>
+          <h1>选择一个秘密</h1>
+          <div class="section-label">内容</div>
+          <div class="locked-box"><span>🔒</span><div><strong>此分组在秘密库中已锁定</strong><p>在左侧输入分组口令后即可查看和编辑内容。</p></div></div>
+        </div>
+        <div id="detailPane" hidden>
+          <div class="eyebrow" id="detailGroup">API</div>
+          <h1 id="detailLabel">阿里百炼 | 语音API</h1>
+          <div class="toolbar">
+            <button disabled>编辑</button>
+            <button disabled>复制内容</button>
+            <button>复制为文档块</button>
+            <button class="new" id="btnMoveSingle">移动到…</button>
+            <button class="danger">删除</button>
+          </div>
+          <div class="hint-box">
+            原型：工具条新增「移动到…」，与列表勾选的「移动到…」同一对话框；当前组锁定、目标组未解锁时在对话框内输入口令。
+          </div>
+          <div class="section-label">Content</div>
+          <div class="locked-box">
+            <span>🔒</span>
+            <div><strong>此分组在秘密库中已锁定</strong><p>在左侧输入分组口令后即可查看和编辑内容。文档中的授权与这里彼此独立。</p></div>
+          </div>
+          <div class="section-label">Metadata</div>
+          <dl>
+            <div><dt>创建时间</dt><dd>2026/08/30 00:41</dd></div>
+            <div><dt>最后更新</dt><dd>2026/08/30 00:41</dd></div>
+          </dl>
+          <div class="section-label">Test cases</div>
+          <div class="test-cases">
+            <b>①</b> 勾选多条 → 操作条出现 → 「移动到…」<br />
+            <b>②</b> 对话框选目标组；源/目标锁定 → 就地输入口令<br />
+            <b>③</b> 确认 → 列表切到目标组、计数更新、toast 反馈<br />
+            <b>④</b> 「取消」退出多选与对话框
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== VIEW 2: REFERENCE SNAPSHOT REFRESH ==================== -->
+<div id="viewReference" hidden>
+  <div class="doc">
+    <h1>API 密钥整理</h1>
+    <div class="doc-meta">2026/09/04 · 已同步</div>
+
+    <div class="para" id="refPara">
+      <span class="snap-link" id="refLink">🔐 [阿里百炼 | 语音API](siyuan://plugins/siyuan-secret-vault/secret/sec_a1b2) · <span id="refLegacyGroup">API</span></span>
+    </div>
+
+    <div class="timeline">
+      <h4>点击引用时的执行时序（原型演示）</h4>
+      <ol id="refSteps">
+        <li id="step1">校验引用身份（custom-secret-id 与 URL 一致）</li>
+        <li id="step2">比对块快照（分组名 = API）与实时数据（分组名 = default）</li>
+        <li id="step3">刷新块：文本与 custom-secret-group-name 属性 → default</li>
+        <li id="step4">打开弹框（按实时分组 default 显示锁定状态）</li>
+      </ol>
+    </div>
+
+    <div id="popoverDemo" class="popover-demo" hidden>
+      <div class="p-head">
+        <div>
+          <div class="p-eyebrow">DEFAULT</div>
+          <h3>阿里百炼 | 语音API</h3>
+        </div>
+        <button class="btn-mini">锁定</button>
+      </div>
+      <div class="section-label">Content</div>
+      <div class="locked-box">
+        <span>🔒</span>
+        <div><strong>此分组在秘密库中已锁定</strong><p>在左侧输入分组口令后即可查看和编辑内容。文档中的授权与这里彼此独立。</p></div>
+      </div>
+    </div>
+
+    <div class="demo-controls">
+      <button id="btnResetRef">重置演示</button>
+      <span class="test-cases">先点击上方旧快照引用，观察时序</span>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== MOVE MODAL ==================== -->
+<div class="backdrop" id="moveModal" hidden>
+  <section class="modal" role="dialog" aria-modal="true">
+    <h3 id="moveTitle">移动 2 个秘密</h3>
+    <p class="muted" id="moveSub">从「API」移动到目标分组 · 秘密 ID 不变，文档引用继续有效</p>
+
+    <label>
+      <span>目标分组</span>
+      <div class="target-list" id="targetList"></div>
+    </label>
+
+    <label id="srcPwdRow">
+      <span>源分组口令（API）</span>
+      <input type="password" id="srcPwd" autocomplete="new-password" placeholder="输入 API 分组口令以解密" />
+    </label>
+    <label id="dstPwdRow">
+      <span>目标分组口令（default）</span>
+      <input type="password" id="dstPwd" autocomplete="new-password" placeholder="输入 default 分组口令以加密" />
+    </label>
+
+    <div class="error" id="moveError"></div>
+
+    <footer>
+      <button class="btn-quiet" id="btnCancelMove">取消</button>
+      <button class="btn-primary" id="btnConfirmMove">移动</button>
+    </footer>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ======================= proto state ======================= */
+const SECRETS = {
+  api: [
+    { id: "sec_a1b2", label: "阿里百炼 | 语音API", group: "api", createdAt: "2026/08/30 00:41", updatedAt: "2026/08/30 00:41" },
+    { id: "sec_c3d4", label: "腾讯云", group: "api", createdAt: "2026/08/21 09:12", updatedAt: "2026/08/21 09:12" },
+  ],
+  default: [
+    { id: "sec_d9e8", label: "（原型占位）已归档密钥", group: "default", createdAt: "2026/07/01 10:00", updatedAt: "2026/07/01 10:00" },
+    { id: "sec_f0g1", label: "（原型占位）邮箱密码", group: "default", createdAt: "2026/07/02 11:00", updatedAt: "2026/07/02 11:00" },
+  ],
+  work: [
+    { id: "sec_h2i3", label: "（原型占位）公司 VPN", group: "work", createdAt: "2026/08/02 12:00", updatedAt: "2026/08/02 12:00" },
+  ],
+};
+const GROUPS = {
+  default: { name: "default", locked: true, count: 12 },
+  api: { name: "API", locked: true, count: 2 },
+  work: { name: "工作", locked: false, count: 1 },
+};
+
+let view = "workbench";
+let currentGroup = "api";
+let checked = new Set();
+let pendingMove = { from: "api", to: null };
+
+const $ = (id) => document.getElementById(id);
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+/* ======================= render list ======================= */
+function renderRows() {
+  const rows = $("secretRows");
+  const items = SECRETS[currentGroup] || [];
+  rows.innerHTML = "";
+  if (items.length === 0) {
+    rows.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">这个分组还没有秘密</div>';
+  }
+  for (const s of items) {
+    const btn = document.createElement("button");
+    btn.className = "row" + (checked.has(s.id) ? " selection-active" : "");
+    btn.innerHTML = `
+      <input type="checkbox" class="cb" ${checked.has(s.id) ? "checked" : ""} />
+      <span class="label">${s.label}</span>
+      <span class="chev">›</span>`;
+    btn.querySelector(".cb").addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleCheck(s.id);
+    });
+    btn.addEventListener("click", () => {
+      if (checked.size > 0) return; /* 多选模式下点击仅用于勾选 */
+      selectDetail(s);
+    });
+    rows.appendChild(btn);
+  }
+  $("listGroupName").textContent = GROUPS[currentGroup].name;
+  $("listGroupBadge").textContent = GROUPS[currentGroup].locked ? "已锁定" : "已解锁";
+  renderSelectBar();
+}
+
+function toggleCheck(id) {
+  if (checked.has(id)) checked.delete(id); else checked.add(id);
+  renderRows();
+}
+
+function renderSelectBar() {
+  const bar = $("selectBar");
+  const n = checked.size;
+  bar.hidden = n === 0;
+  $("selectCount").textContent = `已选 ${n} 项`;
+  $("btnMove").disabled = n === 0;
+}
+
+function selectDetail(s) {
+  $("detailEmpty").hidden = true;
+  $("detailPane").hidden = false;
+  $("detailGroup").textContent = GROUPS[s.group].name;
+  $("detailLabel").textContent = s.label;
+  const rows = document.querySelectorAll("#secretRows .row");
+  rows.forEach((r, i) => {
+    r.classList.toggle("active", SECRETS[currentGroup][i]?.id === s.id);
+  });
+}
+
+/* ======================= groups nav ======================= */
+document.querySelectorAll(".group").forEach((el) => {
+  el.addEventListener("click", () => {
+    currentGroup = el.dataset.group;
+    checked.clear();
+    document.querySelectorAll(".group").forEach((g) => g.classList.toggle("active", g === el));
+    $("detailEmpty").hidden = false;
+    $("detailPane").hidden = true;
+    renderRows();
+  });
+});
+
+/* ======================= move modal ======================= */
+function openMoveModal() {
+  pendingMove = { from: currentGroup, to: null };
+  const n = checked.size;
+  $("moveTitle").textContent = n > 0 ? `移动 ${n} 个秘密` : "移动秘密";
+  $("moveSub").textContent = `从「${GROUPS[currentGroup].name}」移动到目标分组 · 秘密 ID 不变，文档引用继续有效`;
+  $("moveError").textContent = "";
+
+  const srcLocked = GROUPS[currentGroup].locked;
+  $("srcPwdRow").hidden = !srcLocked;
+  $("srcPwd").placeholder = `输入 ${GROUPS[currentGroup].name} 分组口令以解密`;
+  if (!srcLocked) $("srcPwd").value = "";
+
+  const list = $("targetList");
+  list.innerHTML = "";
+  for (const [id, g] of Object.entries(GROUPS)) {
+    if (id === currentGroup) continue;
+    const item = document.createElement("div");
+    item.className = "target-item";
+    item.innerHTML = `<input type="radio" name="target" value="${id}" />
+      <span>${g.name}</span><span class="t-meta">${g.locked ? "已锁定 · 需要口令" : "已解锁"}</span>`;
+    item.addEventListener("click", () => selectTarget(id));
+    list.appendChild(item);
+  }
+  updateDstRow();
+  $("moveModal").hidden = false;
+  $("btnMoveSingle").blur();
+}
+
+function selectTarget(id) {
+  pendingMove.to = id;
+  document.querySelectorAll("#targetList .target-item").forEach((el) => {
+    const selected = el.querySelector("input").value === id;
+    el.classList.toggle("selected", selected);
+    el.querySelector("input").checked = selected;
+  });
+  updateDstRow();
+}
+
+function updateDstRow() {
+  const locked = pendingMove.to ? GROUPS[pendingMove.to].locked : true;
+  $("dstPwdRow").hidden = !locked;
+  $("dstPwd").placeholder = pendingMove.to ? `输入 ${GROUPS[pendingMove.to].name} 分组口令以加密` : "选择目标分组";
+  if (!locked) $("dstPwd").value = "";
+}
+
+$("btnMove").addEventListener("click", () => { if (checked.size > 0) openMoveModal(); });
+$("btnMoveSingle").addEventListener("click", openMoveModal);
+$("btnClearSelect").addEventListener("click", () => { checked.clear(); renderRows(); });
+
+$("btnCancelMove").addEventListener("click", () => { $("moveModal").hidden = true; });
+$("moveModal").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) $("moveModal").hidden = true;
+});
+
+$("btnConfirmMove").addEventListener("click", () => {
+  const err = $("moveError");
+  if (!pendingMove.to) { err.textContent = "请选择目标分组"; return; }
+  const srcNeeds = GROUPS[currentGroup].locked;
+  const dstNeeds = GROUPS[pendingMove.to].locked;
+  if (srcNeeds && !$("srcPwd").value) { err.textContent = `请输入源分组「${GROUPS[currentGroup].name}」的口令`; return; }
+  if (dstNeeds && !$("dstPwd").value) { err.textContent = `请输入目标分组「${GROUPS[pendingMove.to].name}」的口令`; return; }
+
+  /* ---- simulated success ---- */
+  const moved = [...checked].map((id) => {
+    const s = SECRETS[currentGroup].find((x) => x.id === id);
+    SECRETS[pendingMove.to].push({ ...s, group: pendingMove.to });
+    return s.label;
+  });
+  SECRETS[currentGroup] = SECRETS[currentGroup].filter((s) => !checked.has(s.id));
+  GROUPS[currentGroup].count -= moved.length;
+  GROUPS[pendingMove.to].count += moved.length;
+  document.querySelector(`[data-count="${currentGroup}"]`).textContent = GROUPS[currentGroup].count;
+  document.querySelector(`[data-count="${pendingMove.to}"]`).textContent = GROUPS[pendingMove.to].count;
+
+  const from = GROUPS[currentGroup].name;
+  const to = GROUPS[pendingMove.to].name;
+  checked.clear();
+  $("moveModal").hidden = true;
+  currentGroup = pendingMove.to;
+  document.querySelectorAll(".group").forEach((g) => g.classList.toggle("active", g.dataset.group === currentGroup));
+  $("detailEmpty").hidden = false;
+  $("detailPane").hidden = true;
+  renderRows();
+  toast(`已移动 ${moved.length} 个秘密到「${to}」：${moved.join("、")}（演示：源组含口令解密、目标组含口令重加密，均通过）`);
+});
+
+/* ======================= view switching ======================= */
+function switchView(next) {
+  view = next;
+  $("viewWorkbench").hidden = next !== "workbench";
+  $("viewReference").hidden = next !== "reference";
+  $("btnWorkbench").classList.toggle("on", next === "workbench");
+  $("btnReference").classList.toggle("on", next === "reference");
+  window.scrollTo(0, 0);
+}
+$("btnWorkbench").addEventListener("click", () => switchView("workbench"));
+$("btnReference").addEventListener("click", () => switchView("reference"));
+
+/* ======================= reference refresh demo ======================= */
+let refDemo = { seconds: 0 };
+
+function runRefDemo() {
+  if (refDemo.seconds > 0) return; /* 已在演示中 */
+  const steps = ["step1", "step2", "step3", "step4"];
+  refDemo.seconds = 1;
+  $("refLegacyGroup").textContent = "API";
+  $("refPara").classList.remove("updated");
+  $("popoverDemo").hidden = true;
+  steps.forEach((id) => $(id).classList.remove("done"));
+
+  /* step1+2: identity + comparison */
+  setTimeout(() => { $("step1").classList.add("done"); }, 500);
+  setTimeout(() => { $("step2").classList.add("done"); }, 1000);
+  /* step3: update block text + attrs, feedback via toast (showMessage-style) */
+  setTimeout(() => {
+    $("step3").classList.add("done");
+    $("refLegacyGroup").textContent = "default";
+    $("refPara").classList.add("updated");
+    toast("已刷新引用快照：分组名 API → default");
+  }, 1600);
+  /* step4: popover opens with live group */
+  setTimeout(() => {
+    $("step4").classList.add("done");
+    $("popoverDemo").hidden = false;
+  }, 2300);
+  setTimeout(() => { refDemo.seconds = 0; }, 3000);
+}
+$("refLink").addEventListener("click", runRefDemo);
+$("btnResetRef").addEventListener("click", () => {
+  refDemo.seconds = 0;
+  $("refLegacyGroup").textContent = "API";
+  $("refPara").classList.remove("updated");
+  $("popoverDemo").hidden = true;
+  ["step1","step2","step3","step4"].forEach((id) => $(id).classList.remove("done"));
+});
+
+/* ======================= init ======================= */
+renderRows();
+</script>
+</body>
+</html>
