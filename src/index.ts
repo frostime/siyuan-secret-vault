@@ -22,6 +22,21 @@ const ICON = "iconSecretVault";
 
 type SvelteApp = ReturnType<typeof mount>;
 
+/**
+ * Runtime shape of the tab host that siyuan binds as `this` in addTab
+ * callbacks. siyuan@1.2.6 dropped the `this: Custom` annotation on those
+ * callbacks, so this type boundary names only the members the plugin
+ * actually uses instead of asserting the whole Custom interface.
+ */
+interface VaultTabHost {
+  element: HTMLElement;
+  __secretVaultApp?: SvelteApp;
+}
+
+function asVaultTabHost(context: unknown): VaultTabHost {
+  return context as VaultTabHost;
+}
+
 /** Composition root for SiYuan lifecycle and integration points. */
 export default class SecretVaultPlugin extends Plugin {
   private vault!: VaultController;
@@ -104,11 +119,12 @@ export default class SecretVaultPlugin extends Plugin {
     this.addTab({
       type: TAB_TYPE,
       init() {
+        const tab = asVaultTabHost(this);
         const host = document.createElement("div");
         host.className = "secret-vault-tab";
-        this.element.appendChild(host);
+        tab.element.appendChild(host);
 
-        (this as Custom & { __secretVaultApp?: SvelteApp }).__secretVaultApp = mount(VaultApp, {
+        tab.__secretVaultApp = mount(VaultApp, {
           target: host,
           props: {
             vault: plugin.vault,
@@ -119,7 +135,7 @@ export default class SecretVaultPlugin extends Plugin {
         });
       },
       destroy() {
-        const app = (this as Custom & { __secretVaultApp?: SvelteApp }).__secretVaultApp;
+        const app = asVaultTabHost(this).__secretVaultApp;
         if (app) unmount(app);
       },
     });
